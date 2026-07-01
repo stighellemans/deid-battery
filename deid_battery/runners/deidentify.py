@@ -103,11 +103,17 @@ def _annotate(docs, params):
     model_name = params.get("model", DEFAULT_MODEL)
     label_map = {**DEFAULT_LABEL_MAP, **(params.get("label_map") or {})}
     tokenizer = TokenizerFactory().tokenizer(corpus="ons", disable=("tagger", "ner"))
-    tagger = FlairTagger(model=model_name, tokenizer=tokenizer, verbose=False)
+    # PRIMARY memory lever. deidentify's FlairTagger defaults to mini_batch_size=256
+    # (flair's own default is 32) — it feeds 256 sentences per char-LM batch, which
+    # is what spikes RAM to ~12 GB on real clinical text with long sentences. 32 is
+    # the safe default; drop to 8-16 on tight boxes.
+    mbs = int(params.get("mini_batch_size", 32) or 32)
+    tagger = FlairTagger(model=model_name, tokenizer=tokenizer, mini_batch_size=mbs, verbose=False)
 
-    # Window long documents so a single annotate() call never blows past ~max_chars
-    # of char-LM activations (the real OOM cause on large corpora). 0 disables.
-    max_chars = int(params.get("max_chars", 8000) or 0)
+    # Safety net for pathological single long sentences (a multi-KB line with no
+    # break): cap the max chars in one annotate() call. Not the main lever — flair
+    # mini-batches internally — so default is generous. 0 disables.
+    max_chars = int(params.get("max_chars", 20000) or 0)
     overlap = int(params.get("overlap", 500))
 
     by_doc = {}
