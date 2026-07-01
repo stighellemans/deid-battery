@@ -29,7 +29,11 @@ external API).
 > torch 1.10) with no arm64/py3.12 wheels, so it only builds on an **amd64 Linux**
 > host (CPU is fine — no GPU). Build its venv once and reference it with `venv:`:
 > ```bash
-> bash scripts/setup_deidentify_venv.sh /opt/.venv-deidentify   # uv + py3.9 + model
+> bash scripts/setup.sh --deidentify     # builds ./.venv-deidentify (py3.9 + model)
+> # into a shared/root-owned dir like /opt instead? create it for your user first,
+> # then run the dedicated script WITHOUT sudo (sudo hides your uv + misplaces the model):
+> #   sudo install -d -o "$USER" -g "$USER" /opt/.venv-deidentify
+> #   bash scripts/setup_deidentify_venv.sh /opt/.venv-deidentify
 > ```
 > ```yaml
 > - id: deidentify
@@ -42,13 +46,32 @@ external API).
 
 ## Install
 
+One command builds whichever environments you want. It is uv-first: it
+auto-installs [uv](https://astral.sh/uv) and fetches its own Python, so you need
+no `apt` packages and no system `python3.x`.
+
 ```bash
-pip install -e .                              # core (eval + plot + orchestrator)
-pip install -r requirements/robbert.txt       # + the runners you want
-pip install -r requirements/deduce.txt -r requirements/gliner.txt -r requirements/llm.txt
-# privacy filters in a separate env (transformers>=5.7):
+bash scripts/setup.sh          # main env .venv: core + robbert + deduce + gliner + llm
+bash scripts/setup.sh --pf     # + privacy-filters env (.venv-pf, transformers>=5.7)
+bash scripts/setup.sh --all    # + deidentify env (.venv-deidentify, amd64 Linux only)
+```
+
+Then:
+
+```bash
+cp configs/battery.example.yaml configs/battery.yaml    # edit models/paths
+.venv/bin/python -m deid_battery.orchestrate run --config configs/battery.yaml
+```
+
+<details><summary>Manual install (no setup script / no uv)</summary>
+
+```bash
+pip install -e . -r requirements/robbert.txt -r requirements/deduce.txt \
+                 -r requirements/gliner.txt  -r requirements/llm.txt
+# privacy filters need a SEPARATE env (transformers>=5.7 conflicts with gliner):
 python -m venv .venv-pf && .venv-pf/bin/pip install -e . -r requirements/privacy-filters.txt
 ```
+</details>
 
 ## Use
 

@@ -26,18 +26,12 @@ unzip deid-export.zip          # -> results.jsonl  (id, raw_text, spans, ...)
 ```bash
 git clone <your deid-battery repo> && cd deid-battery
 
-# main env: core + the runners that share transformers<5.7
-python3 -m venv .venv && . .venv/bin/activate
-pip install -e . \
-  -r requirements/robbert.txt -r requirements/deduce.txt \
-  -r requirements/gliner.txt  -r requirements/llm.txt
-# belgian-deduce is not on PyPI -- install from its repo:
-pip install /path/to/belgian-deduce
-deactivate
+# one command builds .venv (main) + .venv-pf (privacy filters). uv fetches its
+# own Python, so the python3-venv/build-essential from step 1 are optional.
+bash scripts/setup.sh --pf
 
-# second env for the privacy filters (transformers>=5.7)
-python3 -m venv .venv-pf
-.venv-pf/bin/pip install -e . -r requirements/privacy-filters.txt
+# belgian-deduce isn't on PyPI -- add it to the main env from its repo:
+.venv/bin/pip install /path/to/belgian-deduce
 ```
 
 CPU note: `pip install torch` pulls the CPU build automatically on a VM without
