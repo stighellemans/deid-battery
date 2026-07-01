@@ -1,20 +1,15 @@
 """Essential-recall + false-positive-burden plot, from an evaluation payload.
 
-Wraps the vendored ``evaluation_plots`` (matplotlib). Sources with zero
-predictions are dropped from the plot. Returns the summary DataFrame.
+Wraps ``evaluation_plots`` from the shared ``deid-eval`` package (matplotlib) --
+no longer a vendored copy. Sources with zero predictions are dropped from the
+plot. Returns the summary DataFrame.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-_VENDOR = Path(__file__).resolve().parent / "_vendor"
-sys.path.insert(0, str(_VENDOR))
+import evaluation_plots as ep
 
 
 def plot(payload: dict, out_path):
-    import evaluation_plots as ep
-
     summary = ep.build_summary_frame(payload)
     if not summary.empty:
         summary = summary[summary["prediction_span_count"] > 0].reset_index(drop=True)
@@ -24,7 +19,6 @@ def plot(payload: dict, out_path):
 
 def plot_recall_by_gold_label(payload: dict, out_path):
     """Essential-recall heatmap: gold label (row) x source (col)."""
-    import evaluation_plots as ep
     matrix, counts = ep.build_recall_matrix(
         payload, group_name="by_gold_label", row_key="gold_label",
         metric_key="essential_recall", count_key="gold_span_count")
@@ -36,7 +30,6 @@ def plot_recall_by_gold_label(payload: dict, out_path):
 
 def plot_recall_by_subannotation_category(payload: dict, out_path):
     """Recall heatmap: subannotation category (row) x source (col)."""
-    import evaluation_plots as ep
     matrix, counts = ep.build_recall_matrix(
         payload, group_name="by_subannotation_category", row_key="category",
         metric_key=None, count_key="total_chars",
