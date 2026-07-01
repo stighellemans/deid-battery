@@ -12,12 +12,16 @@ config::
       venv: /opt/deidentify-venv          # the py3.9 amd64 env
       params: {model: model_bilstmcrf_ons_large-v0.2.0, chunk: 50}
 
-Memory: the bilstmcrf models use PooledFlairEmbeddings, whose footprint grows per
-doc and is NOT reclaimed in-process even after the pool is cleared (glibc keeps
-the high-water RSS). So a full run is split into ``chunk``-sized slices, each in a
-FRESH subprocess (the OS reclaims memory on exit). The pool is also cleared per
-doc, so each note is embedded independently and results are chunk-invariant —
-``chunk`` is purely a memory bound (50 docs ~= 9 GB; lower it for less RAM).
+Memory (measured, amd64 CPU): this runner has a FLAT ~8.7 GB footprint that is
+empirically insensitive to document length, count, vocabulary, sentence length,
+mini_batch_size, and windowing (all tested, up to 200 KB docs / 40-doc batches).
+So `chunk`, `max_chars` and `mini_batch_size` do NOT reduce peak RAM — an OOM
+above ~9 GB is box concurrency (e.g. VS Code's remote server co-resident with
+this), not the runner growing. To run it safely: give the box headroom above
+~9 GB and/or contain it in a memory-capped cgroup (systemd-run --property
+MemoryMax=…). `chunk` still runs the corpus in fresh subprocesses (nice for fault
+isolation / progress) but is not a memory lever; `mini_batch_size=32` (default)
+is ~30% faster than deidentify's 256 at the same memory.
 """
 from __future__ import annotations
 
@@ -103,17 +107,21 @@ def _annotate(docs, params):
     model_name = params.get("model", DEFAULT_MODEL)
     label_map = {**DEFAULT_LABEL_MAP, **(params.get("label_map") or {})}
     tokenizer = TokenizerFactory().tokenizer(corpus="ons", disable=("tagger", "ner"))
-    # PRIMARY memory lever. deidentify's FlairTagger defaults to mini_batch_size=256
-    # (flair's own default is 32) — it feeds 256 sentences per char-LM batch, which
-    # is what spikes RAM to ~12 GB on real clinical text with long sentences. 32 is
-    # the safe default; drop to 8-16 on tight boxes.
+    # NOTE: this runner's memory footprint is a FLAT ~8.7 GB on CPU, empirically
+    # insensitive to doc length, count, vocabulary, sentence length, mini_batch_size
+    # AND windowing (measured on an amd64 VM across all of these). So neither knob
+    # below reduces peak RAM — a >8.7 GB OOM is box concurrency (e.g. VS Code's
+    # remote server + this), not the runner. Contain it with a cgroup cap and give
+    # the box headroom above ~9 GB.
+    #
+    # mini_batch_size: deidentify defaults to 256; 32 is the same memory but ~30%
+    # FASTER on CPU (256 wastes time on padding), so it's the default here for speed.
     mbs = int(params.get("mini_batch_size", 32) or 32)
     tagger = FlairTagger(model=model_name, tokenizer=tokenizer, mini_batch_size=mbs, verbose=False)
 
-    # Safety net for pathological single long sentences (a multi-KB line with no
-    # break): cap the max chars in one annotate() call. Not the main lever — flair
-    # mini-batches internally — so default is generous. 0 disables.
-    max_chars = int(params.get("max_chars", 20000) or 0)
+    # Optional opt-in safety net for a pathological single multi-KB unbroken line;
+    # does NOT lower the ~8.7 GB footprint, so default OFF (0). Set e.g. 20000 to enable.
+    max_chars = int(params.get("max_chars", 0) or 0)
     overlap = int(params.get("overlap", 500))
 
     by_doc = {}
