@@ -1,10 +1,10 @@
-"""Unified span schema + by_doc I/O shared by every runner. Stdlib only.
+"""Unified span schema + by_doc I/O shared by every runner.
 
 Every runner emits one record per document::
 
     {"doc_id": str, "num_entities": int, "entities": [span, ...]}
 
-where ``span = {begin, end, label, text, Category, Subtype}`` (Category/Subtype
+where ``span = {begin, end, label, text, category, subtype}`` (category/subtype
 are derived from ``label`` of the form ``Category:Subtype`` or just ``Category``).
 """
 from __future__ import annotations
@@ -13,20 +13,20 @@ import json
 from pathlib import Path
 from typing import Any
 
-SPAN_FIELDS = ("begin", "end", "label", "text", "Category", "Subtype")
+from deid_schema.taxonomy import split_label
+
+SPAN_FIELDS = ("begin", "end", "label", "text", "category", "subtype")
 
 
 def split_category_subtype(label: str) -> tuple[str, str | None]:
-    if label and ":" in label:
-        cat, sub = label.split(":", 1)
-        return cat, sub
-    return label, None
+    # Delegate to the shared schema so the split rule stays canonical.
+    return split_label(label)
 
 
 def make_span(begin: int, end: int, label: str, text: str, **extra: Any) -> dict:
-    cat, sub = split_category_subtype(label)
+    cat, sub = split_label(label)
     span = {"begin": int(begin), "end": int(end), "label": label,
-            "text": text, "Category": cat, "Subtype": sub}
+            "text": text, "category": cat, "subtype": sub}
     span.update(extra)
     return span
 

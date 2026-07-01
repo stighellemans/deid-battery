@@ -35,7 +35,7 @@ def canonical(spans, text):
         e = max(0, min(e, len(text)))
         if e <= b:
             continue
-        label = s.get("label") or s.get("Category")
+        label = s.get("label") or s.get("category") or s.get("Category")
         if not label:
             continue
         out.append(make_span(b, e, str(label), text[b:e]))
