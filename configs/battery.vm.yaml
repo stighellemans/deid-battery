@@ -74,21 +74,26 @@ models:
     venv: .venv-deidentify      # built by: scripts/setup.sh --deidentify (amd64 Linux, CPU)
     params: {model: model_bilstmcrf_ons_large-v0.2.0, chunk: 50}
 
-  # LLM (Qwen) on CPU via llama.cpp. START THE SERVER FIRST, THEN uncomment this block.
-  # On CPU this row is SLOW (thinking-on Qwen3-8B over 300 docs can take hours) -- time a
-  # small --limit subset first. Leave it commented until the server is actually up: if the
-  # endpoint is down the runner retries every doc before failing, which stalls the whole run.
-  #   .venv/bin/pip install "llama-cpp-python[server]"
-  #   .venv/bin/python -m llama_cpp.server --model qwen3-8b-Q4_K_M.gguf --host 127.0.0.1 \
-  #       --port 8089 --n_ctx 8192 --chat_format chatml &
+  # LLM (Qwen) — runs on a SEPARATE GPU server (ollama or llama.cpp), NOT on this CPU box.
+  # The battery just HTTP-calls the OpenAI-compatible endpoint, so point base_url at the GPU
+  # host and uncomment when that server is up.
+  #
+  # COMPLIANCE: patient text is POSTed to base_url, so the GPU server must be YOUR OWN private
+  # endpoint reachable over the private network (e.g. the Azure GPU VM's VNet IP) — never a
+  # public/hosted API. That keeps the run fully offline.
+  #
+  #   ollama    (GPU host):  ollama pull qwen3:8b   -> http://<GPU_HOST>:11434/v1, model qwen3:8b
+  #                          set a large context for long docs: OLLAMA_CONTEXT_LENGTH=16384 (or a Modelfile num_ctx)
+  #   llama.cpp (GPU host):  llama-server -m Qwen3-8B-Q4_K_M.gguf --jinja -c 16384 --port 8089
+  #                          -> http://<GPU_HOST>:8089/v1
   # - id: qwen3-8b
   #   runner: llm
   #   params:
-  #     base_url: http://127.0.0.1:8089/v1
-  #     model: qwen3-8b
+  #     base_url: http://<GPU_HOST>:11434/v1   # ollama default port; use :8089/v1 for llama.cpp
+  #     model: qwen3:8b                         # ollama tag; for llama.cpp use its served model name
   #     prompt_dir: prompts       # dict_prompt.txt, dict_example.txt, labels.csv
   #     thinking: true            # essential: ~14x lower FP than no-think
-  #     workers: 1                # CPU: keep low (llama.cpp serves ~1 request at a time)
+  #     workers: 4                # GPU handles concurrency; tune to the box
 
 postprocess:
   enabled: true
