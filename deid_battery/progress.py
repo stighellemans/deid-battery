@@ -30,6 +30,11 @@ def track(iterable, params=None, total=None, unit="doc"):
             total = len(iterable)
         except TypeError:
             total = None
+    # No TTY (journald / nohup logfile / subprocess pipe): tqdm would draw a
+    # *disabled* (silent) bar, leaving long runs looking frozen. Fall back to
+    # periodic newline-terminated counter lines that are readable in logs.
+    if not sys.stderr.isatty():
+        return _counter(iterable, label, total)
     try:
         from tqdm import tqdm
         return tqdm(iterable, desc=label or None, total=total, unit=unit,
@@ -40,11 +45,14 @@ def track(iterable, params=None, total=None, unit="doc"):
 
 def _counter(iterable, label, total):
     pre = f"[{label}] " if label else ""
+    tty = sys.stderr.isatty()
     every = max(1, (total or 100) // 20)
     i = 0
     for i, item in enumerate(iterable, 1):
         if total and (i % every == 0 or i == total):
-            print(f"\r{pre}{i}/{total}", end="", file=sys.stderr, flush=True)
+            # TTY: overwrite one line with \r. Non-TTY (logs): clean newline lines.
+            lead, end = ("\r", "") if tty else ("", "\n")
+            print(f"{lead}{pre}{i}/{total}", end=end, file=sys.stderr, flush=True)
         yield item
-    if total and i:
+    if total and i and tty:
         print("", file=sys.stderr)
