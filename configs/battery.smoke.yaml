@@ -45,7 +45,11 @@ models:
     params:
       checkpoint: /Users/stighellemans/Desktop/DEID/open-deid/models/deid-robbert-synthetic-all-cleaned-training-ready-holdout300-6393-earlystop-gold-mps-newdates/best.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
-      train_metrics: /Users/stighellemans/Desktop/DEID/open-deid/models/deid-robbert-synthetic-all-cleaned-training-ready-holdout300-6393-earlystop-gold-mps-newdates/train_metrics.json
+      # inline the 15 labels (identical set + order to uza) instead of linking train_metrics.json
+      entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
+                      Age_Birthdate, Contactdetails, Date, ID:Caregiver, ID:Patient, Name:Caregiver,
+                      Name:Other, Name:Patient, Organization:Healthcare, Organization:Other,
+                      Organization:Patient, Profession]
 
 postprocess:
   enabled: true

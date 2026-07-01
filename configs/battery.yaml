@@ -47,8 +47,14 @@ models:
     params:
       checkpoint: /Users/stighellemans/Desktop/DEID/open-deid/models/deid-robbert-synthetic-all-cleaned-training-ready-holdout300-6393-earlystop-gold-mps-newdates/best.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
-      # canonical 15-label metrics live NEXT TO the checkpoint (the outputs/ copy is the stale 14-label one)
-      train_metrics: /Users/stighellemans/Desktop/DEID/open-deid/models/deid-robbert-synthetic-all-cleaned-training-ready-holdout300-6393-earlystop-gold-mps-newdates/train_metrics.json
+      # Same 15-label set AND order as uza (verified identical), so inline them instead of
+      # linking train_metrics.json -> one fewer file to copy. NOTE: the runner checks label
+      # COUNT, not order; fine for this frozen checkpoint. If synthetic is ever retrained with a
+      # different label order, re-inline from that run's train_metrics.json.
+      entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
+                      Age_Birthdate, Contactdetails, Date, ID:Caregiver, ID:Patient, Name:Caregiver,
+                      Name:Other, Name:Patient, Organization:Healthcare, Organization:Other,
+                      Organization:Patient, Profession]
 
   # LLM (Qwen) — needs a running OpenAI-compatible endpoint. None is up by default
   # on this Mac; start one, e.g.:
