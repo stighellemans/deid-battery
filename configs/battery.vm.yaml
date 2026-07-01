@@ -1,0 +1,103 @@
+# VM config: run the FULL battery on a CPU (amd64 Linux) box. All 9 systems, both
+# metadata conditions, post-process + eval + plot. Data stays on the VM.
+#
+# All paths are RELATIVE TO THE REPO ROOT -- run every command from the repo root.
+#
+# One-time setup on the VM (from the repo root):
+#   # 1) environments (main + privacy-filters + deidentify) and belgian-deduce from git:
+#   bash scripts/setup.sh --all \
+#       --belgian-deduce "git+https://github.com/stighellemans/belgian-deduce.git"
+#   # 2) checkpoints: drop the two .pt files here (copied out-of-band; not in git):
+#   #      models/uza/model.pt          (uza)
+#   #      models/synthetic/best.pt     (synthetic)
+#   mkdir -p models/uza models/synthetic
+#   # 3) gold: put the gold files on the VM, then build the input (oracle metadata baked in):
+#   #      - the corrected gold annotations.jsonl  -> builds input.jsonl
+#   #      - the deid-eval-annotator bundle        -> ./evaluation_bundle/ (reference_items.jsonl + manifest.json)
+#   .venv/bin/python scripts/build_input_from_gold.py --gold /path/to/annotations.jsonl --out input.jsonl
+#
+# Run:
+#   .venv/bin/python -m deid_battery.orchestrate run --config configs/battery.vm.yaml
+#
+# Outputs land in out/ : per-model by_doc spans, summary.csv, recall_fp_burden.png.
+# Only summary.csv + the plot are score-only (no patient text) -> safe to copy off.
+input: input.jsonl
+output_dir: out
+device: cpu                    # CPU is the intended, reproducible mode; no CUDA needed
+
+metadata:
+  source: from_input          # oracle patient/caregiver names baked into input.jsonl by the pre-step
+
+conditions:
+  - {id: nometa, name: "no metadata", metadata: {source: none}}
+  - {id: meta,   name: "with metadata"}
+
+models:
+  - id: belgian-deduce
+    runner: deduce
+    params: {engine: belgian-deduce}
+  - id: deduce
+    runner: deduce
+    params: {engine: deduce}
+  - id: gliner-pii
+    runner: gliner
+    params: {model: urchade/gliner_multi_pii-v1, threshold: 0.5}
+  - id: openai-privacy-filter
+    runner: hf_token
+    venv: .venv-pf              # built by: scripts/setup.sh --pf
+    params: {model: openai/privacy-filter}
+  - id: openmed-multilingual
+    runner: hf_token
+    venv: .venv-pf
+    params: {model: OpenMed/privacy-filter-multilingual}
+  - id: uza
+    runner: robbert
+    params:
+      checkpoint: models/uza/model.pt
+      base_model: DTAI-KULeuven/robbert-2023-dutch-base
+      entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
+                      Age_Birthdate, Contactdetails, Date, ID:Caregiver, ID:Patient, Name:Caregiver,
+                      Name:Other, Name:Patient, Organization:Healthcare, Organization:Other,
+                      Organization:Patient, Profession]
+  - id: synthetic
+    runner: robbert
+    params:
+      checkpoint: models/synthetic/best.pt
+      base_model: DTAI-KULeuven/robbert-2023-dutch-base
+      # same 15-label set + order as uza (verified identical) -> inline, no train_metrics.json needed
+      entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
+                      Age_Birthdate, Contactdetails, Date, ID:Caregiver, ID:Patient, Name:Caregiver,
+                      Name:Other, Name:Patient, Organization:Healthcare, Organization:Other,
+                      Organization:Patient, Profession]
+  - id: deidentify
+    runner: deidentify
+    venv: .venv-deidentify      # built by: scripts/setup.sh --deidentify (amd64 Linux, CPU)
+    params: {model: model_bilstmcrf_ons_large-v0.2.0, chunk: 50}
+
+  # LLM (Qwen) on CPU via llama.cpp. START THE SERVER FIRST, THEN uncomment this block.
+  # On CPU this row is SLOW (thinking-on Qwen3-8B over 300 docs can take hours) -- time a
+  # small --limit subset first. Leave it commented until the server is actually up: if the
+  # endpoint is down the runner retries every doc before failing, which stalls the whole run.
+  #   .venv/bin/pip install "llama-cpp-python[server]"
+  #   .venv/bin/python -m llama_cpp.server --model qwen3-8b-Q4_K_M.gguf --host 127.0.0.1 \
+  #       --port 8089 --n_ctx 8192 --chat_format chatml &
+  # - id: qwen3-8b
+  #   runner: llm
+  #   params:
+  #     base_url: http://127.0.0.1:8089/v1
+  #     model: qwen3-8b
+  #     prompt_dir: prompts       # dict_prompt.txt, dict_example.txt, labels.csv
+  #     thinking: true            # essential: ~14x lower FP than no-think
+  #     workers: 1                # CPU: keep low (llama.cpp serves ~1 request at a time)
+
+postprocess:
+  enabled: true
+  use_metadata: true
+  rules: true
+  inception: false              # INCEpTION-token normalization needs a JVM; leave off
+
+evaluate:
+  enabled: true
+  bundle: evaluation_bundle     # the deid-eval-annotator gold bundle placed on the VM
+  ignore_categories: [formatting, additional_info, medical_info, time, title]
+  plot: recall_fp_burden.png
