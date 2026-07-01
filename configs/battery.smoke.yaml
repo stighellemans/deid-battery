@@ -1,0 +1,60 @@
+# Smoke-test config: 12-doc slice, every runner that can run on this Mac, both
+# metadata conditions, full post-process + eval + plot. Fast end-to-end check.
+#   PYTHONPATH=.. <open-deid venv python> -m deid_battery.orchestrate run \
+#       --config configs/battery.smoke.yaml
+input: input.smoke.jsonl
+output_dir: out_smoke
+device: cpu
+
+metadata:
+  source: from_input          # oracle patient/caregiver names baked into input.smoke.jsonl
+
+conditions:
+  - {id: nometa, name: "no metadata", metadata: {source: none}}
+  - {id: meta,   name: "with metadata"}
+
+models:
+  - id: belgian-deduce
+    runner: deduce
+    params: {engine: belgian-deduce}
+  - id: deduce
+    runner: deduce
+    params: {engine: deduce}
+  - id: gliner-pii
+    runner: gliner
+    params: {model: urchade/gliner_multi_pii-v1, threshold: 0.5}
+  - id: openai-privacy-filter
+    runner: hf_token
+    venv: /Users/stighellemans/Desktop/DEID/gold-testset-validation/model_spans/.venv-pf
+    params: {model: openai/privacy-filter}
+  - id: openmed-multilingual
+    runner: hf_token
+    venv: /Users/stighellemans/Desktop/DEID/gold-testset-validation/model_spans/.venv-pf
+    params: {model: OpenMed/privacy-filter-multilingual}
+  - id: uza
+    runner: robbert
+    params:
+      checkpoint: /Users/stighellemans/Desktop/DEID/azure-vm-server-lean/model/model.pt
+      base_model: DTAI-KULeuven/robbert-2023-dutch-base
+      entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
+                      Age_Birthdate, Contactdetails, Date, ID:Caregiver, ID:Patient, Name:Caregiver,
+                      Name:Other, Name:Patient, Organization:Healthcare, Organization:Other,
+                      Organization:Patient, Profession]
+  - id: synthetic
+    runner: robbert
+    params:
+      checkpoint: /Users/stighellemans/Desktop/DEID/open-deid/models/deid-robbert-synthetic-all-cleaned-training-ready-holdout300-6393-earlystop-gold-mps-newdates/best.pt
+      base_model: DTAI-KULeuven/robbert-2023-dutch-base
+      train_metrics: /Users/stighellemans/Desktop/DEID/open-deid/models/deid-robbert-synthetic-all-cleaned-training-ready-holdout300-6393-earlystop-gold-mps-newdates/train_metrics.json
+
+postprocess:
+  enabled: true
+  use_metadata: true
+  rules: true
+  inception: false
+
+evaluate:
+  enabled: true
+  bundle: evaluation_bundle.smoke
+  ignore_categories: [formatting, additional_info, medical_info, time, title]
+  plot: recall_fp_burden.png

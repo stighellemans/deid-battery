@@ -1,0 +1,86 @@
+# Full production config: all 300 gold docs, every system, both metadata
+# conditions, full post-process + eval + plot. Wired to the real assets on this
+# machine. Build the input first (oracle metadata baked in), then run:
+#   python scripts/build_input_from_gold.py --out input.jsonl
+#   PYTHONPATH=.. <open-deid venv python> -m deid_battery.orchestrate run \
+#       --config configs/battery.yaml
+input: input.jsonl
+output_dir: out
+device: cpu                    # cpu | mps | cuda (cpu is safe + reproducible on this Mac)
+
+metadata:
+  source: from_input          # oracle patient/caregiver names baked into input.jsonl
+
+conditions:
+  - {id: nometa, name: "no metadata", metadata: {source: none}}
+  - {id: meta,   name: "with metadata"}
+
+models:
+  - id: belgian-deduce
+    runner: deduce
+    params: {engine: belgian-deduce}
+  - id: deduce
+    runner: deduce
+    params: {engine: deduce}
+  - id: gliner-pii
+    runner: gliner
+    params: {model: urchade/gliner_multi_pii-v1, threshold: 0.5}
+  - id: openai-privacy-filter
+    runner: hf_token
+    venv: /Users/stighellemans/Desktop/DEID/gold-testset-validation/model_spans/.venv-pf
+    params: {model: openai/privacy-filter}
+  - id: openmed-multilingual
+    runner: hf_token
+    venv: /Users/stighellemans/Desktop/DEID/gold-testset-validation/model_spans/.venv-pf
+    params: {model: OpenMed/privacy-filter-multilingual}
+  - id: uza
+    runner: robbert
+    params:
+      checkpoint: /Users/stighellemans/Desktop/DEID/azure-vm-server-lean/model/model.pt
+      base_model: DTAI-KULeuven/robbert-2023-dutch-base
+      entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
+                      Age_Birthdate, Contactdetails, Date, ID:Caregiver, ID:Patient, Name:Caregiver,
+                      Name:Other, Name:Patient, Organization:Healthcare, Organization:Other,
+                      Organization:Patient, Profession]
+  - id: synthetic
+    runner: robbert
+    params:
+      checkpoint: /Users/stighellemans/Desktop/DEID/open-deid/models/deid-robbert-synthetic-all-cleaned-training-ready-holdout300-6393-earlystop-gold-mps-newdates/best.pt
+      base_model: DTAI-KULeuven/robbert-2023-dutch-base
+      # canonical 15-label metrics live NEXT TO the checkpoint (the outputs/ copy is the stale 14-label one)
+      train_metrics: /Users/stighellemans/Desktop/DEID/open-deid/models/deid-robbert-synthetic-all-cleaned-training-ready-holdout300-6393-earlystop-gold-mps-newdates/train_metrics.json
+
+  # LLM (Qwen) — needs a running OpenAI-compatible endpoint. None is up by default
+  # on this Mac; start one, e.g.:
+  #   ollama pull qwen3:8b && ollama serve            # -> base_url http://127.0.0.1:11434/v1, model qwen3:8b
+  #   llama-server -m Qwen3-8B-Q4_K_M.gguf --jinja -c 16384 --port 8089   # -> :8089/v1
+  # then uncomment. Thinking ON is essential (~14x lower FP than no-think).
+  # - id: qwen3-8b
+  #   runner: llm
+  #   params:
+  #     base_url: http://127.0.0.1:11434/v1
+  #     model: qwen3:8b
+  #     prompt_dir: prompts
+  #     thinking: true
+  #     workers: 2
+
+  # Deidentify (nedap/Trienes 2020) — runs in a dedicated py3.9 venv (2020 stack,
+  # amd64 Linux, CPU). Build it once, then set `venv:` to its path and uncomment:
+  #   bash scripts/setup_deidentify_venv.sh /opt/.venv-deidentify
+  # (does NOT run on this Mac — arm64/py3.12 has no wheels; use an amd64 Linux host.)
+  # - id: deidentify
+  #   runner: deidentify
+  #   venv: /opt/.venv-deidentify
+  #   params: {model: model_bilstmcrf_ons_large-v0.2.0, chunk: 50}
+
+postprocess:
+  enabled: true
+  use_metadata: true
+  rules: true
+  inception: false            # INCEpTION-token normalization needs a JVM
+
+evaluate:
+  enabled: true
+  bundle: evaluation_bundle    # symlink -> ../deid-evaluation/evaluation_bundle (300-doc gold)
+  ignore_categories: [formatting, additional_info, medical_info, time, title]
+  plot: recall_fp_burden.png

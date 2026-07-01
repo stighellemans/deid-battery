@@ -1,0 +1,11 @@
+Originele tekst:
+De heer Jan Janssens, een 39-jarige man, rapporteert een doffe, constante pijn aan de linkerzijde van zijn borst die begon op 20/12/2024. De pijn wordt verergerd door fysieke inspanning maar verbetert bij rust. Geen eerdere episodes met vergelijkbare symptomen. Hij vermeldt dat zijn vader, Michael Janssens, op 52-jarige leeftijd is overleden aan een hartinfarct.
+
+JSON:
+{"spans": [{"annotated_text":"Jan Janssens","label":"Name:Patient"},{"annotated_text":"39-jarige","label":"Age_Birthdate"},{"annotated_text":"20/12/2024","label":"Date"},{"annotated_text":"Michael Janssens","label":"Name:Other"},{"annotated_text":"52-jarige","label":"Age_Birthdate"}]}
+
+Originele tekst:
+Follow-upafspraak inplannen voor 27/12/2024 bij de Cardio Kliniek Antwerpen.
+
+JSON:
+{"spans": [{"annotated_text":"27/12/2024","label":"Date"},{"annotated_text":"Cardio Kliniek Antwerpen","label":"Organization:Healthcare"}]}

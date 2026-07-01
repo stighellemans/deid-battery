@@ -1,0 +1,16 @@
+Label,Beschrijving
+Name:Patient,"Voornamen, achternamen of initialen van de patiënt."
+Name:Caregiver,"Namen en initialen van zorgverleners, inclusief titels zoals Dr./Prof."
+Name:Other,"Namen van familieleden, vrienden of andere niet-zorgverleners."
+Address_Location:Patient,Adressen en plaatsen gekoppeld aan de patiënt.
+Address_Location:Caregiver,Adressen van zorgverleners of zorginstellingen.
+Address_Location:Other,Adressen en plaatsen van externe personen of gebeurtenissen.
+Organization:Healthcare,Zorginstellingen en gezondheidsorganisaties.
+Organization:Other,Niet-zorggerelateerde organisaties zoals bedrijven of clubs.
+Date,"Datums, inclusief feestdagen, dag-maand-jaar combinaties."
+Age_Birthdate,Leeftijd of geboortedatum van de patiënt.
+Profession,"Beroepen van patiënt of naasten, niet van zorgverleners."
+Contactdetails,"Contactgegevens zoals telefoon, e-mail, fax, websites."
+ID:Patient,Unieke patiënt-ID’s zoals rijksregisternummer of patiëntnummer.
+ID:Caregiver,Unieke zorgverlener-ID’s zoals RIZIV- of BIG-nummer.
+Anonymize_Other,Andere identificeerbare gegevens die niet in een andere categorie vallen.

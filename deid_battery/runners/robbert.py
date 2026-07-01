@@ -1,0 +1,212 @@
+"""RobBERT-style dual-head token-classification runner (bring-your-own .pt).
+
+Loads a checkpoint with ``bio_classifier`` + ``label_classifier`` heads on top of
+a HF encoder; sliding-window inference with overlap; CPU/CUDA/MPS auto.
+
+config::
+    - id: my-robbert
+      runner: robbert
+      params:
+        checkpoint: /path/to/model.pt
+        base_model: DTAI-KULeuven/robbert-2023-dutch-base
+        train_metrics: /path/to/train_metrics.json   # supplies bio_labels/entity_labels
+        # or set explicitly: entity_labels: [...]   bio_labels: [O, B, I]
+        max_length: 256
+        overlap: 64
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+
+from ..progress import track
+from ..schema import make_span
+
+
+def _device(name):
+    import torch
+    if name in (None, "auto", "", "cpu") and name != "cpu":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        mps = getattr(torch.backends, "mps", None)
+        if mps is not None and mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
+    return torch.device(name or "cpu")
+
+
+def _windows(n, usable, overlap):
+    if n <= 0:
+        return
+    if n <= usable:
+        yield 0, n
+        return
+    step = usable - overlap
+    last = n - usable
+    s = 0
+    while s < last:
+        yield s, s + usable
+        s += step
+    yield last, n
+
+
+def _labels(params):
+    bio = params.get("bio_labels")
+    ent = params.get("entity_labels")
+    if not ent and params.get("train_metrics"):
+        m = json.loads(Path(params["train_metrics"]).read_text(encoding="utf-8"))
+        bio = bio or m.get("bio_labels")
+        ent = m.get("entity_labels")
+    return bio or ["O", "B", "I"], ent
+
+
+def _decode(pb, pe, offs, text, bio_labels, ent_labels, bio_o):
+    spans, start, cur_ent, end = [], None, None, None
+
+    def flush():
+        nonlocal start, cur_ent, end
+        if start is not None and end is not None:
+            b, e = int(offs[start][0]), int(offs[end][1])
+            if e > b:
+                spans.append(make_span(b, e, cur_ent, text[b:e]))
+        start = cur_ent = end = None
+
+    for i, (bi, ei) in enumerate(zip(pb, pe)):
+        if int(offs[i][1]) <= int(offs[i][0]):
+            continue
+        tag = bio_labels[int(bi)] if int(bi) < len(bio_labels) else "O"
+        if int(bi) == bio_o or tag not in ("B", "I"):
+            flush()
+            continue
+        ent = ent_labels[int(ei)]
+        if tag == "B" or start is None or ent != cur_ent:
+            flush()
+            start, cur_ent = i, ent
+        end = i
+    flush()
+    spans.sort(key=lambda s: (s["begin"], s["end"]))
+    return spans
+
+
+def _prepare_window(tok, ids_slice):
+    """Pack a token-id slice with the model's special tokens, robustly across
+    transformers versions (mirrors the azure-vm server's build_prepared_window):
+    prefer prepare_for_model, then build_inputs_with_special_tokens, then a manual
+    cls/sep (or bos/eos) wrap. Returns (input_ids, special_tokens_mask)."""
+    ids_slice = list(ids_slice)
+    try:
+        prepared = tok.prepare_for_model(
+            ids_slice, add_special_tokens=True, return_attention_mask=True,
+            return_special_tokens_mask=True, truncation=False)
+        return list(prepared["input_ids"]), list(prepared["special_tokens_mask"])
+    except (AttributeError, AssertionError, NotImplementedError, TypeError, ValueError, KeyError):
+        pass  # method missing (transformers 5.x removed it) or unsupported -> manual packing below
+    build_inputs = getattr(tok, "build_inputs_with_special_tokens", None)
+    if callable(build_inputs):
+        packed = list(build_inputs(ids_slice))
+    else:
+        cls_id = getattr(tok, "cls_token_id", None)
+        if cls_id is None:
+            cls_id = getattr(tok, "bos_token_id", None)
+        sep_id = getattr(tok, "sep_token_id", None)
+        if sep_id is None:
+            sep_id = getattr(tok, "eos_token_id", None)
+        if cls_id is None or sep_id is None:
+            raise AttributeError(f"{tok.__class__.__name__} cannot add special tokens")
+        packed = [cls_id, *ids_slice, sep_id]
+    get_special_mask = getattr(tok, "get_special_tokens_mask", None)
+    special = None
+    if callable(get_special_mask):
+        try:
+            special = list(get_special_mask(packed, already_has_special_tokens=True))
+        except (AttributeError, AssertionError, NotImplementedError, TypeError, ValueError):
+            special = None
+    if special is None or len(special) != len(packed):
+        special = [1] + [0] * (len(packed) - 2) + [1]
+    return packed, special
+
+
+def run(docs, params):
+    import torch
+    from transformers import AutoConfig, AutoModel, AutoTokenizer
+
+    device = _device(params.get("device"))
+    payload = torch.load(str(Path(params["checkpoint"]).expanduser()),
+                         map_location="cpu", weights_only=False)
+    state = payload["model_state_dict"] if isinstance(payload, dict) and "model_state_dict" in payload else payload
+    num_bio = int(state["bio_classifier.weight"].shape[0])
+    num_ent = int(state["label_classifier.weight"].shape[0])
+    bio_labels, ent_labels = _labels(params)
+    if not ent_labels or len(ent_labels) != num_ent:
+        raise ValueError(f"entity_labels ({0 if not ent_labels else len(ent_labels)}) != head size "
+                         f"{num_ent}; set params.entity_labels or params.train_metrics")
+
+    base = params.get("base_model", "DTAI-KULeuven/robbert-2023-dutch-base")
+    tok = AutoTokenizer.from_pretrained(base, use_fast=True, add_prefix_space=True)
+    # stable character offsets for byte-level BPE (otherwise spans are off by one)
+    try:
+        from tokenizers.pre_tokenizers import ByteLevel
+        backend = getattr(tok, "backend_tokenizer", None)
+        if backend is not None and "ByteLevel" in str(getattr(backend, "pre_tokenizer", "")):
+            backend.pre_tokenizer = ByteLevel(add_prefix_space=True, use_regex=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            cfg = AutoConfig.from_pretrained(base)
+            self.encoder = AutoModel.from_pretrained(base, config=cfg)
+            h = int(cfg.hidden_size)
+            self.dropout = torch.nn.Dropout(float(getattr(cfg, "hidden_dropout_prob", 0.1)))
+            self.bio_classifier = torch.nn.Linear(h, num_bio)
+            self.label_classifier = torch.nn.Linear(h, num_ent)
+
+        def forward(self, input_ids, attention_mask):
+            o = self.encoder(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
+            hid = self.dropout(o.last_hidden_state)
+            return self.bio_classifier(hid), self.label_classifier(hid)
+
+    model = Model()
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing or unexpected:
+        raise RuntimeError(f"checkpoint mismatch: missing={missing} unexpected={unexpected}")
+    model.to(device).eval()
+
+    max_len = int(params.get("max_length", 256))
+    overlap = int(params.get("overlap", 64))
+    try:
+        n_special = int(tok.num_special_tokens_to_add(pair=False))
+    except (AttributeError, NotImplementedError, TypeError):
+        n_special = 2  # roberta/bert <s> ... </s>; matches the manual packing fallback
+    usable = max_len - n_special
+    bio_o = bio_labels.index("O") if "O" in bio_labels else 0
+
+    by_doc = {}
+    for d in track(docs, params):
+        text = d["text"]
+        enc = tok(text, add_special_tokens=False, return_offsets_mapping=True, verbose=False)
+        ids, offs = enc["input_ids"], [tuple(x) for x in enc["offset_mapping"]]
+        n = len(ids)
+        if n == 0:
+            by_doc[d["doc_id"]] = []
+            continue
+        bio_sum = np.zeros((n, num_bio)); ent_sum = np.zeros((n, num_ent)); cnt = np.zeros(n)
+        with torch.no_grad():
+            for s, e in _windows(n, usable, overlap):
+                sl = ids[s:e]
+                packed, special = _prepare_window(tok, sl)
+                inp = torch.tensor([packed], device=device)
+                att = torch.ones_like(inp)
+                bl, ll = model(input_ids=inp, attention_mask=att)
+                mask = np.array(special, dtype=bool)
+                bio_sum[s:e] += bl[0].cpu().numpy()[~mask]
+                ent_sum[s:e] += ll[0].cpu().numpy()[~mask]
+                cnt[s:e] += 1
+        cnt[cnt == 0] = 1
+        pb = (bio_sum / cnt[:, None]).argmax(1)
+        pe = (ent_sum / cnt[:, None]).argmax(1)
+        by_doc[d["doc_id"]] = _decode(pb, pe, offs, text, bio_labels, ent_labels, bio_o)
+    return by_doc

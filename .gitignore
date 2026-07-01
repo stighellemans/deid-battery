@@ -1,0 +1,25 @@
+# --- Sensitive: PHI + gold. NEVER commit. ---
+*.jsonl
+input.jsonl
+input.smoke.jsonl
+out/
+out_smoke/
+evaluation_bundle
+evaluation_bundle*/
+
+# --- Model weights (too big for GitHub; transfer out-of-band) ---
+*.pt
+*.pt.bak*
+*.gguf
+*.bin
+*.safetensors
+
+# --- Envs / build / caches ---
+.venv*/
+*.egg-info/
+__pycache__/
+*.pyc
+
+# --- Logs / OS ---
+*.log
+.DS_Store

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deid-battery"
+version = "0.1.0"
+description = "A portable, config-driven battery of de-identification systems: unified spans, metadata injection, and essential-recall / false-positive-burden evaluation."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Stig Hellemans" }]
+dependencies = ["pyyaml>=6", "numpy>=1.24", "pandas>=2.0", "matplotlib>=3.7"]
+
+[project.optional-dependencies]
+# Install only the runners you need. NB: gliner and the privacy filters have
+# CONFLICTING transformers pins -- run the privacy filters in a separate env
+# (see `venv:` in the config and docs/run_on_vm.md).
+deduce = ["deduce>=3.0"]                      # belgian-deduce: install from its repo
+robbert = ["torch>=2.2", "transformers>=4.40,<5.7"]
+gliner = ["gliner>=0.2.13", "onnxruntime"]   # pins transformers<5.7
+privacy-filters = ["torch>=2.2", "transformers>=5.7"]
+llm = ["requests>=2.28"]
+
+[project.scripts]
+deid-battery = "deid_battery.orchestrate:main"
+
+[tool.setuptools]
+packages = [
+    "deid_battery",
+    "deid_battery.runners",
+    "deid_battery._vendor",
+    "deid_battery._vendor.post_process",
+]
+include-package-data = true

@@ -1,0 +1,115 @@
+# deid-battery configuration. Every path/model/label/device is set here -- no
+# hardcoded paths, so this is portable across the CPU VM and GPU machines.
+
+# INPUT: the battery's own JSONL of {doc_id, text, [metadata], [annotations]}.
+# Produce it from a raw source with the pre-step below -- conversion stays OUT of
+# the battery run, and the field mapping lives in the `adapter:` block (not a long
+# command line):
+#   python -m deid_battery.inputs --config battery.yaml
+input: input.jsonl
+
+# INPUT ADAPTER -- used ONLY by that pre-step, never by the battery run. Maps a
+# raw source JSONL's columns to text + per-doc metadata, writing `input:` above.
+adapter:
+  from: ~/results.jsonl       # raw source JSONL
+  text_field: raw_text        # column with the document text -> text
+  id_field: id                # column with the doc id        -> doc_id
+  metadata_fields:            # columns -> patient / caregiver / date metadata
+    patient_first: patient_first_name
+    patient_last:  patient_last_name
+    doc_date:      date
+    # optional: patient_initials, caregiver_first, caregiver_last
+
+output_dir: out
+device: cpu                   # cpu | cuda | mps   (omit to auto-detect)
+
+# ---------------------------------------------------------------------------
+# METADATA: known identifiers fed into the deduce runners AND post-processing.
+#   source: none       -> no metadata
+#           from_input -> each doc carries an explicit `metadata` key-value object
+# Metadata is only ever taken from that explicit object -- never derived from the
+# gold annotation spans.
+# ---------------------------------------------------------------------------
+metadata:                     # the BASELINE metadata, shared by all conditions below
+  source: from_input          # fetch the `metadata` embedded in each input.jsonl row
+                              # (written by the deid_battery.inputs pre-step above)
+
+# ---------------------------------------------------------------------------
+# CONDITIONS (optional): run every model under several metadata settings and
+# plot them side by side as sources "<id>@<condition>" -- the canonical
+# no-metadata vs with-metadata benchmark. Each condition INHERITS the top-level
+# `metadata:` above and overrides only what it states, so the shared part is
+# written once. The expensive raw inference is SHARED across
+# conditions for every runner except deduce (metadata-at-inference), so the
+# extra condition is nearly free. Omit this whole block to just use the baseline.
+# ---------------------------------------------------------------------------
+conditions:
+  - {id: nometa, name: "no metadata", metadata: {source: none}}  # override baseline -> off
+  - {id: meta,   name: "with metadata"}                          # inherits the baseline as-is
+  # a condition may also override postprocess, e.g.:
+  #   - {id: meta-norules, name: "meta, rules off", postprocess: {rules: false}}
+
+# ---------------------------------------------------------------------------
+# MODELS: each emits the same unified spans. `venv` (optional) runs that runner
+# with a different interpreter (e.g. the transformers>=5.7 env for the filters).
+# ---------------------------------------------------------------------------
+models:
+  - id: belgian-deduce
+    runner: deduce
+    params: {engine: belgian-deduce}     # consumes metadata: patient+caregiver names, addresses, date
+
+  - id: deduce
+    runner: deduce
+    params: {engine: deduce}             # plain deduce consumes patient name only
+
+  - id: gliner-pii
+    runner: gliner
+    params: {model: urchade/gliner_multi_pii-v1, threshold: 0.5}
+
+  - id: my-robbert                       # bring-your-own dual-head checkpoint
+    runner: robbert
+    params:
+      checkpoint: /path/to/model.pt
+      base_model: DTAI-KULeuven/robbert-2023-dutch-base
+      train_metrics: /path/to/train_metrics.json   # for the label order (or set entity_labels:)
+
+  - id: openai-privacy-filter
+    runner: hf_token
+    venv: ../.venv-pf                    # OpenAIPrivacyFilter arch needs transformers>=5.7
+    params: {model: openai/privacy-filter}
+
+  - id: openmed-multilingual
+    runner: hf_token
+    venv: ../.venv-pf
+    params: {model: OpenMed/privacy-filter-multilingual}
+
+  - id: qwen
+    runner: llm
+    params:
+      base_url: http://127.0.0.1:8089/v1  # OpenAI-compatible: vLLM (GPU) or llama.cpp (CPU)
+      model: qwen3-8b
+      prompt_dir: prompts                 # dict_prompt.txt, dict_example.txt, labels.csv
+      thinking: true                      # essential for Qwen DEID quality (~14x lower FP than no-think)
+      # reasoning: {effort: medium}       # for OpenRouter-style endpoints
+
+# ---------------------------------------------------------------------------
+# POST-PROCESSING: shared, applied to every model so the comparison is fair.
+# Decoupled from inference: raw model spans are cached to out/<id>/raw.jsonl, so
+# you can re-tune or toggle post-processing WITHOUT re-running the models --
+#   edit this block, then:  python -m deid_battery.orchestrate run --config ... --no-run
+# ---------------------------------------------------------------------------
+postprocess:
+  enabled: true
+  compare: false              # also plot each model's raw (pre-postprocess) spans as "<id>__raw"
+  use_metadata: true          # inject known patient/caregiver names at this stage too
+  rules: true                 # trim, regex date/URL extension, weekday extension, dedup
+  inception: false            # INCEpTION-token normalization (needs a JVM)
+
+# ---------------------------------------------------------------------------
+# EVALUATION: char-level essential-recall + FP-burden against a gold bundle.
+# ---------------------------------------------------------------------------
+evaluate:
+  enabled: true
+  bundle: evaluation_bundle   # deid-eval-annotator gold bundle (reference_items.jsonl)
+  ignore_categories: [formatting, additional_info, medical_info, time, title]
+  plot: recall_fp_burden.png

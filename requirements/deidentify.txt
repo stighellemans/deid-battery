@@ -1,0 +1,20 @@
+# deidentify (nedap/Trienes 2020) — a 2020 stack with NO arm64/py3.12 wheels.
+# Install into a DEDICATED py3.9 venv on an amd64 Linux host (see
+# scripts/setup_deidentify_venv.sh), reference it via `venv:` in the config, then
+# download the model:  python -m deidentify.util.download_model model_bilstmcrf_ons_large-v0.2.0
+#
+# Pins are exact (validated end-to-end on amd64 Linux / CPU):
+#   numpy 1.23.5     thinc 7.4.6 ABI (numpy 2.x breaks it)
+#   torch 1.10.2     1.12+ adds a load_state_dict post-hook loop that fails on the
+#                    2020 pickled PooledFlairEmbeddings (CPU wheel is fine — no GPU needed)
+#   transformers 4.17 flair-0.10 era (newer needs torch>=2.1)
+#   deduce <2        deidentify imports the old deduce.lookup_lists API
+#   setuptools <81   flair->gdown needs pkg_resources (removed in 81)
+setuptools<81
+deidentify==0.7.3
+numpy==1.23.5
+torch==1.10.2
+transformers==4.17.0
+deduce>=1.0.2,<2
+# spaCy 2.3 Dutch model for the 'ons' tokenizer (not on PyPI — direct URL):
+https://github.com/explosion/spacy-models/releases/download/nl_core_news_sm-2.3.0/nl_core_news_sm-2.3.0.tar.gz

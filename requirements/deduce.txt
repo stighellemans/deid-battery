@@ -1,0 +1,4 @@
+# Dutch rule engines
+deduce>=3.0
+# belgian-deduce: install from your repo (not on PyPI):
+#   pip install ./belgian-deduce
