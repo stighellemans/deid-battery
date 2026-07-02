@@ -43,13 +43,14 @@ models:
   - id: synthetic
     runner: robbert
     params:
-      checkpoint: /Users/stighellemans/Desktop/DEID/open-deid/models/deid-robbert-synthetic-all-cleaned-training-ready-holdout300-6393-earlystop-gold-mps-newdates/best.pt
+      checkpoint: /Users/stighellemans/Desktop/DEID/open-deid/models/deid-robbert-synthetic-all-cleaned-training-ready-holdout300-6393-fulltrain-refit-mps-newdates/best.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
-      # inline the 15 labels (identical set + order to uza) instead of linking train_metrics.json
+      # 14-label head: Stage-2 fulltrain-refit, retrofitted 15->14 (retired Organization:Patient row dropped).
+      # uza above stays 15 (that model will be replaced).
       entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
                       Age_Birthdate, Contactdetails, Date, ID:Caregiver, ID:Patient, Name:Caregiver,
                       Name:Other, Name:Patient, Organization:Healthcare, Organization:Other,
-                      Organization:Patient, Profession]
+                      Profession]
 
 postprocess:
   enabled: true

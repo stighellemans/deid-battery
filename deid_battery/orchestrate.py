@@ -145,6 +145,14 @@ def run(config_path, only=None, skip_existing=False, no_run=False):
             if device and "device" not in params:
                 params["device"] = device
             params["_label"] = tag  # progress-bar label (see deid_battery.progress.track)
+            # Per-document checkpoint: the expensive runners (deidentify, llm) append
+            # each finished doc here and resume from it after an interruption. It is
+            # promoted to raw.jsonl and removed on success, and left in place on
+            # failure so the next run continues where it stopped. Runners that don't
+            # stream per-doc ignore it (and never create the file).
+            ckpt_p = raw_p.with_name(f"{raw_p.stem}.partial{raw_p.suffix}")
+            raw_p.parent.mkdir(parents=True, exist_ok=True)
+            params["_checkpoint"] = str(ckpt_p.resolve())
             metas = metas_by_cond[cid] if sensitive else None  # raw is meta-neutral otherwise
             print(f"[{tag}] running ({runner})...", flush=True)
             try:
@@ -154,6 +162,7 @@ def run(config_path, only=None, skip_existing=False, no_run=False):
                 else:
                     by = get_runner(runner)(rdocs, params)
                 write_by_doc(raw_p, by)
+                ckpt_p.unlink(missing_ok=True)  # raw.jsonl now supersedes the partial
                 print(f"[{tag}] {sum(len(v) for v in by.values())} raw spans -> {raw_p}", flush=True)
             except Exception as e:  # one model must not abort the whole battery (e.g. LLM endpoint down)
                 failed.append((tag, f"{type(e).__name__}: {str(e)[:160]}"))
@@ -180,16 +189,26 @@ def run(config_path, only=None, skip_existing=False, no_run=False):
 
     # --- Stage 3: evaluate / plot over EVERY (model, condition) on disk -- not
     # just those run this invocation. So `--only X`, `--skip-existing`, and
-    # `--no-run` all still produce the full combined plot. ---
+    # `--no-run` all still produce the full combined plot. A source is included
+    # only if its output covers ALL input docs; an INCOMPLETE one (an interrupted
+    # run whose checkpoint was promoted, or a stale output from a smaller input)
+    # is excluded with a warning so partial coverage never skews the scores. ---
+    input_ids = {str(d["doc_id"]) for d in docs}
     by_doc_paths, names, order = {}, {}, []
     for m in cfg["models"]:
         nm = m.get("name", m["id"])
         for c in conditions:
             cid = c["id"]
+            sid = _src_id(m["id"], cid)
             bp = out / m["id"] / f"by_doc{_suffix(cid)}.jsonl"
             if not bp.exists():
                 continue
-            sid = _src_id(m["id"], cid)
+            missing = input_ids - set(read_by_doc(bp))
+            if missing:
+                print(f"WARNING: [{sid}] excluded from evaluation -- incomplete output: "
+                      f"{len(input_ids) - len(missing)}/{len(input_ids)} docs "
+                      f"({len(missing)} missing). Re-run to finish it.", flush=True)
+                continue
             by_doc_paths[sid] = str(bp)
             names[sid] = f"{nm} ({c['name']})" if c["name"] else nm
             order.append(sid)
@@ -197,13 +216,15 @@ def run(config_path, only=None, skip_existing=False, no_run=False):
     # Single-condition only: optional raw-vs-postprocess overlay ("<id>__raw").
     if not multi and pp_cfg.get("enabled", True) and pp_cfg.get("compare"):
         for m in cfg["models"]:
+            if m["id"] not in order:  # main source absent/excluded -> no raw overlay
+                continue
             raw_p = out / m["id"] / "raw.jsonl"
             if not raw_p.exists():
                 continue
             rid = m["id"] + "__raw"
             by_doc_paths[rid] = str(raw_p)
             names[rid] = names.get(m["id"], m["id"]) + " (raw)"
-            order.insert(order.index(m["id"]) + 1, rid) if m["id"] in order else order.append(rid)
+            order.insert(order.index(m["id"]) + 1, rid)
     elif multi and pp_cfg.get("compare"):
         print("note: postprocess.compare is ignored when multiple conditions are defined.", flush=True)
 

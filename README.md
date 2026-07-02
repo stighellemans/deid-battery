@@ -89,6 +89,41 @@ python -m deid_battery.orchestrate run --config configs/battery.yaml
 Outputs in `output_dir/`: `<model>/by_doc.jsonl` (unified spans per model),
 `summary.csv`, `quantity_payload.json`, and `recall_fp_burden.png`.
 
+## Resuming an interrupted run
+
+Inference is checkpointed **per document**, so a run that stops partway
+(Ctrl-C, OOM, an LLM endpoint drop) never loses finished work. To continue,
+re-run the same command with `--skip-existing`:
+
+```bash
+.venv/bin/python -m deid_battery.orchestrate run --config configs/battery.yaml --skip-existing
+```
+
+Completed models are skipped (their `raw.jsonl` exists); any model that was
+mid-flight **resumes from where it stopped** — you'll see e.g.
+`[deidentify] resume: 240/300 docs already done`, and a runner whose docs are
+all done won't even load its model.
+
+How it works: each finished document is appended to `output_dir/<model>/raw.partial.jsonl`
+the moment it completes. On success that file is promoted to `raw.jsonl` and
+removed; if the run dies it's left in place to resume from. Failed docs (e.g. a
+dropped LLM call) are **not** checkpointed, so they retry on the next run.
+
+**Incomplete outputs are excluded from evaluation, with a warning** — partial
+coverage can never skew the scores:
+
+```
+WARNING: [uza@meta] excluded from evaluation -- incomplete output: 240/300 docs (60 missing). Re-run to finish it.
+```
+
+This also fires if you grow `input.jsonl` and re-run with `--skip-existing`: the
+older, now-incomplete model outputs are flagged and dropped until re-run.
+
+> Resume is for a **stopped** run — don't point two processes at the same
+> `output_dir` at once (they'd both append to the same partial). For the
+> `deidentify` runner two concurrent processes would also exceed its ~9 GB
+> footprint.
+
 ## Metadata (patient / caregiver names, addresses, document date)
 
 Known identifiers are a first-class, optional input that feeds **both** the

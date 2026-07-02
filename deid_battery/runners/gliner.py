@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from ..progress import track
+from ..checkpoint import ordered, resume_split, track
 from ..schema import make_span
 
 # word/punctuation tokens, ~matching GLiNER's word splitter, for token-sized windows
@@ -51,6 +51,9 @@ def _windows(text, max_tokens, overlap_tokens):
 
 
 def run(docs, params):
+    ckpt, todo, by_doc = resume_split(docs, params)
+    if not todo:  # everything already checkpointed -> don't load the model
+        return ordered(docs, by_doc)
     from gliner import GLiNER
 
     model = GLiNER.from_pretrained(params.get("model", "urchade/gliner_multi_pii-v1"))
@@ -66,8 +69,7 @@ def run(docs, params):
     max_tokens = int(params.get("max_tokens") or max(64, model_max - 100))
     overlap_tokens = int(params.get("overlap_tokens", 50))
 
-    by_doc = {}
-    for d in track(docs, params):
+    for d in track(todo, params):
         text = d["text"]
         best: dict[tuple, dict] = {}
         for offset, chunk in _windows(text, max_tokens, overlap_tokens):
@@ -81,5 +83,7 @@ def run(docs, params):
                 key, score = (b, e, label), float(ent.get("score", 0.0))
                 if key not in best or score > best[key]["score"]:
                     best[key] = make_span(b, e, label, text[b:e], score=score)
-        by_doc[d["doc_id"]] = sorted(best.values(), key=lambda s: (s["begin"], s["end"]))
-    return by_doc
+        spans = sorted(best.values(), key=lambda s: (s["begin"], s["end"]))
+        by_doc[d["doc_id"]] = spans
+        ckpt.record(d["doc_id"], spans)
+    return ordered(docs, by_doc)

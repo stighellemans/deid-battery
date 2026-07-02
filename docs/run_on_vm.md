@@ -81,6 +81,19 @@ This runs every model → shared post-processing (with metadata) → evaluation 
 `out/recall_fp_burden.png` + `out/summary.csv`. Watch the log; each model prints
 its span count.
 
+**Interrupted? Just re-run with `--skip-existing`.** CPU inference is slow, so a
+run may be stopped (Ctrl-C, an OOM, an overnight disconnect). Inference is
+checkpointed per document, so nothing finished is lost:
+
+```bash
+.venv/bin/python -m deid_battery.orchestrate run --config configs/battery.yaml --skip-existing
+```
+
+Finished models are skipped; a model that was mid-flight continues from
+`out/<model>/raw.partial.jsonl` (`[deidentify] resume: 240/300 docs already done`).
+An incomplete model is **excluded from the evaluation/plot with a warning** until
+it's finished, so a partial run never skews the scores.
+
 ## 6. Take only the aggregates off the VM, then stop it
 
 ```bash
@@ -99,3 +112,6 @@ gcloud compute instances stop deid-review-vm --zone=europe-north1-b   # from you
   is never derived from the gold annotation spans.
 - **One model at a time.** Comment models in/out of the config; outputs are
   per-model, so you can add the slow LLM row later without rerunning the rest.
+- **Safe to interrupt.** Every runner checkpoints per document; re-run with
+  `--skip-existing` to resume an interrupted run (see step 5). Don't run two
+  processes against the same `out/` at once — resume is for a *stopped* run.

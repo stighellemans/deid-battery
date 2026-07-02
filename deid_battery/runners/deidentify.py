@@ -32,7 +32,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from ..progress import track
+from ..checkpoint import Checkpoint, ordered, resume_split, track
 from ..schema import make_span, read_by_doc, read_jsonl, write_by_doc
 
 DEFAULT_MODEL = "model_bilstmcrf_ons_large-v0.2.0"
@@ -94,7 +94,13 @@ def _windows(text, max_chars, overlap):
 
 def _annotate(docs, params):
     """In-process inference over (a slice of) docs. Run per chunk in a fresh
-    subprocess by run()."""
+    subprocess by run(). Resumes from (and appends to) the per-doc checkpoint,
+    so already-finished docs are never recomputed -- and the ~8.7 GB model is
+    not even loaded when every doc in this slice is already done."""
+    ckpt, todo, by_doc = resume_split(docs, params)
+    if not todo:
+        return ordered(docs, by_doc)
+
     import flair
     import torch
     from deidentify.base import Document
@@ -124,8 +130,7 @@ def _annotate(docs, params):
     max_chars = int(params.get("max_chars", 0) or 0)
     overlap = int(params.get("overlap", 500))
 
-    by_doc = {}
-    for d in track(docs, params):
+    for d in track(todo, params):
         text = d.get("text", "")
         best: dict[tuple, dict] = {}
         if text.strip():
@@ -144,8 +149,10 @@ def _annotate(docs, params):
                     pass
                 finally:
                     _clear_pool(tagger)
-        by_doc[d["doc_id"]] = sorted(best.values(), key=lambda s: (s["begin"], s["end"]))
-    return by_doc
+        spans = sorted(best.values(), key=lambda s: (s["begin"], s["end"]))
+        by_doc[d["doc_id"]] = spans
+        ckpt.record(d["doc_id"], spans)  # persist this doc before starting the next
+    return ordered(docs, by_doc)
 
 
 def _run_chunk_subprocess(chunk_docs, params):
@@ -176,12 +183,19 @@ def run(docs, params):
     if params.get("_inproc") or not chunk or len(docs) <= chunk:
         return _annotate(docs, params)
 
-    by_doc = {}
+    label = params.get("_label", "deidentify")
     n = len(docs)
+    # Seed from the per-doc checkpoint so an interrupted run resumes; a chunk whose
+    # docs are all already done is skipped entirely (no subprocess, no model reload).
+    ckpt = Checkpoint(params.get("_checkpoint"))
+    by_doc = {d["doc_id"]: ckpt.get(d["doc_id"]) for d in docs if ckpt.has(d["doc_id"])}
+    if by_doc:
+        print(f"[{label}] resume: {len(by_doc)}/{n} docs already done", file=sys.stderr, flush=True)
     for start in range(0, n, chunk):
         sl = docs[start:start + chunk]
-        print(f"[{params.get('_label', 'deidentify')}] chunk {start}-{start + len(sl)}/{n}",
-              file=sys.stderr, flush=True)
+        if all(ckpt.has(d["doc_id"]) for d in sl):
+            continue  # whole chunk already checkpointed
+        print(f"[{label}] chunk {start}-{start + len(sl)}/{n}", file=sys.stderr, flush=True)
         by_doc.update(_run_chunk_subprocess(sl, params))
     # preserve input order
     return {d["doc_id"]: by_doc.get(d["doc_id"], []) for d in docs}

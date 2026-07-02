@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 
-from ..progress import track
+from ..checkpoint import ordered, resume_split, track
 from ..schema import make_span
 
 # belgian_deduce calls logging.basicConfig(level=DEBUG) on import; keep it quiet.
@@ -120,6 +120,9 @@ def _deduce_metadata(meta, engine, classes):
 
 
 def run(docs, params) -> dict[str, list[dict]]:
+    ckpt, todo, by_doc = resume_split(docs, params)
+    if not todo:  # everything already checkpointed -> don't construct the engine
+        return ordered(docs, by_doc)
     engine = (params or {}).get("engine", "belgian-deduce")
     if engine == "deduce":
         from deduce import Deduce
@@ -133,10 +136,11 @@ def run(docs, params) -> dict[str, list[dict]]:
         raise ValueError(f"deduce runner: unknown engine {engine!r}")
 
     model = Deduce()
-    by_doc = {}
-    for d in track(docs, params):
+    for d in track(todo, params):
         text = d["text"]
         md = _deduce_metadata(d.get("_meta") or {}, engine, classes)
         document = model.deidentify(text, metadata=md) if md else model.deidentify(text)
-        by_doc[d["doc_id"]] = _doc_to_spans(document, text, label_map)
-    return by_doc
+        spans = _doc_to_spans(document, text, label_map)
+        by_doc[d["doc_id"]] = spans
+        ckpt.record(d["doc_id"], spans)
+    return ordered(docs, by_doc)

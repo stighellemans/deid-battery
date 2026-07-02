@@ -3,8 +3,9 @@
 Works with vLLM (GPU), llama.cpp (CPU), or any hosted server -- set base_url.
 On the review VM (data must stay local) point base_url at a llama.cpp server on
 the VM itself. Output is grammar-constrained JSON (response_format json_schema)
-and spans are aligned to char offsets by EXACT literal matching (the prompt asks
-for verbatim copies), with guards against repetition-loop artifacts.
+and spans are aligned to char offsets by exact literal matching, with a small
+dependency-free fallback (whitespace/case-tolerant regex) for near-verbatim
+copies, plus guards against repetition-loop artifacts.
 
 config::
     - id: qwen
@@ -29,16 +30,18 @@ where you want grammar-constrained output and the model does not reason.
 from __future__ import annotations
 
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
 
-from ..progress import track
+from ..checkpoint import Checkpoint, ordered, track
 from ..schema import make_span
 
 DELIM = "Originele tekst:"
+THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 def _load_assets(prompt_dir):
@@ -114,9 +117,9 @@ def _salvage_spans(s):
 
 
 def _parse(content):
-    s = content.strip()
-    if "</think>" in s:                 # drop a leading reasoning block
-        s = s.split("</think>", 1)[1].strip()
+    # strip all <think> blocks, unwrap a ``` fence, seek the JSON object,
+    # salvage the complete elements if a truncated list didn't close.
+    s = THINK_RE.sub("", content or "").strip()
     if s.startswith("```"):
         s = s.split("\n", 1)[1].rsplit("```", 1)[0]
     i = s.find("{")
@@ -128,6 +131,19 @@ def _parse(content):
         return spans if isinstance(spans, list) else []
     except json.JSONDecodeError:        # truncated / soft JSON -> salvage
         return _salvage_spans(s)
+
+
+def _fuzzy_find(text, phrase):
+    """Single fallback when the model's copy isn't a verbatim substring: tolerate
+    whitespace-run and case differences (Qwen often normalizes newlines/spacing
+    when copying). `\\s+` between tokens can only bridge whitespace, never other
+    characters, so this cannot stitch unrelated words together."""
+    parts = phrase.split()
+    if not parts:
+        return None
+    pattern = r"\s+".join(re.escape(p) for p in parts)
+    m = re.search(pattern, text, re.IGNORECASE)
+    return (m.start(), m.end()) if m else None
 
 
 def _extract(text, raw):
@@ -144,6 +160,10 @@ def _extract(text, raw):
                 break
             hits.append((i, i + len(phrase)))
             start = i + len(phrase)
+        if not hits:  # no verbatim copy -> tolerate whitespace/case near-misses
+            fz = _fuzzy_find(text, phrase)
+            if fz:
+                hits = [fz]
         if len(hits) > 10:  # repetition-loop / common-substring guard
             continue
         for b, e in hits:
@@ -174,16 +194,29 @@ def run(docs, params):
         except Exception as e:  # noqa: BLE001
             return d["doc_id"], [], f"{type(e).__name__}: {str(e)[:100]}"
 
-    by_doc, fails = {}, []
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [ex.submit(work, d) for d in docs]
-        for fut in track(as_completed(futures), params, total=len(docs)):
-            doc_id, spans, err = fut.result()
-            by_doc[doc_id] = sorted(spans, key=lambda s: (s["begin"], s["end"]))
-            if err:
-                fails.append((doc_id, err))
+    # Per-doc checkpoint: resume from finished docs, and persist each doc the
+    # moment it succeeds so an interrupted run (Ctrl-C / endpoint drop) is cheap
+    # to continue. Failed docs are NOT recorded, so they retry on the next run.
+    ckpt = Checkpoint(params.get("_checkpoint"))
+    todo = [d for d in docs if not ckpt.has(d["doc_id"])]
+    by_doc = {d["doc_id"]: ckpt.get(d["doc_id"]) for d in docs if ckpt.has(d["doc_id"])}
+    if by_doc:
+        print(f"  [llm] resume: {len(by_doc)}/{len(docs)} docs already done", flush=True)
+
+    fails = []
+    if todo:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = [ex.submit(work, d) for d in todo]
+            for fut in track(as_completed(futures), params, total=len(todo)):
+                doc_id, spans, err = fut.result()
+                spans = sorted(spans, key=lambda s: (s["begin"], s["end"]))
+                by_doc[doc_id] = spans
+                if err:
+                    fails.append((doc_id, err))
+                else:
+                    ckpt.record(doc_id, spans)
     if fails:
         print(f"  [llm] {len(fails)} docs failed; first: {fails[0]}")
-    if fails and len(fails) == len(docs):  # endpoint unreachable -> fail the model, don't emit phantom spans
-        raise RuntimeError(f"all {len(docs)} docs failed (endpoint unreachable?): {fails[0][1]}")
-    return by_doc
+    if todo and len(fails) == len(todo):  # everything attempted failed -> endpoint down; don't emit phantom spans
+        raise RuntimeError(f"all {len(todo)} docs failed (endpoint unreachable?): {fails[0][1]}")
+    return ordered(docs, by_doc)

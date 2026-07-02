@@ -11,7 +11,7 @@ privacy filters).
 """
 from __future__ import annotations
 
-from ..progress import track
+from ..checkpoint import ordered, resume_split, track
 from ..schema import make_span
 
 # native label (lowercased) -> project Category. Covers openai/privacy-filter and
@@ -107,6 +107,9 @@ def _predict_chunk(model, tok, chunk, torch):
 
 
 def run(docs, params):
+    ckpt, todo, by_doc = resume_split(docs, params)
+    if not todo:  # everything already checkpointed -> don't load the model
+        return ordered(docs, by_doc)
     import torch
     from transformers import AutoModelForTokenClassification, AutoTokenizer
 
@@ -116,8 +119,7 @@ def run(docs, params):
         model_id, trust_remote_code=params.get("trust_remote_code", True)).eval()
     label_map = {k.lower(): v for k, v in (params.get("label_map") or DEFAULT_LABEL_MAP).items()}
 
-    by_doc = {}
-    for d in track(docs, params):
+    for d in track(todo, params):
         text = d["text"]
         best: dict[tuple, dict] = {}
         for offset, chunk in _windows(text):
@@ -131,5 +133,7 @@ def run(docs, params):
                 key = (b, e, label)
                 if key not in best or s["score"] > best[key]["score"]:
                     best[key] = make_span(b, e, label, text[b:e], score=s["score"])
-        by_doc[d["doc_id"]] = sorted(best.values(), key=lambda s: (s["begin"], s["end"]))
-    return by_doc
+        spans = sorted(best.values(), key=lambda s: (s["begin"], s["end"]))
+        by_doc[d["doc_id"]] = spans
+        ckpt.record(d["doc_id"], spans)
+    return ordered(docs, by_doc)

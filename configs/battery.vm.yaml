@@ -19,6 +19,12 @@
 # Run:
 #   .venv/bin/python -m deid_battery.orchestrate run --config configs/battery.vm.yaml
 #
+# Resume (after a Ctrl-C / OOM / disconnect -- inference is checkpointed per doc):
+#   .venv/bin/python -m deid_battery.orchestrate run --config configs/battery.vm.yaml --skip-existing
+#   Finished models are skipped; a mid-flight model continues from out/<model>/raw.partial.jsonl.
+#   An incomplete model is excluded from eval with a warning until it's finished. Don't run two
+#   processes against the same out/ at once.
+#
 # Outputs land in out/ : per-model by_doc spans, summary.csv, recall_fp_burden.png.
 # Only summary.csv + the plot are score-only (no patient text) -> safe to copy off.
 input: input.jsonl
@@ -64,36 +70,39 @@ models:
     params:
       checkpoint: models/synthetic/best.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
-      # same 15-label set + order as uza (verified identical) -> inline, no train_metrics.json needed
+      # 14-label head: gold checkpoint trimmed 15->14 (retired subtype's slot dropped).
+      # uza above stays 15 (that model will be replaced).
       entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
                       Age_Birthdate, Contactdetails, Date, ID:Caregiver, ID:Patient, Name:Caregiver,
                       Name:Other, Name:Patient, Organization:Healthcare, Organization:Other,
-                      Organization:Patient, Profession]
+                      Profession]
   - id: deidentify
     runner: deidentify
     venv: .venv-deidentify      # built by: scripts/setup.sh --deidentify (amd64 Linux, CPU)
     params: {model: model_bilstmcrf_ons_large-v0.2.0, chunk: 50}
 
-  # LLM (Qwen) — runs on a SEPARATE GPU server (ollama or llama.cpp), NOT on this CPU box.
-  # The battery just HTTP-calls the OpenAI-compatible endpoint, so point base_url at the GPU
-  # host and uncomment when that server is up.
+  # LLM (Qwen) — served by Ollama on the operator's Mac. Empirically verified to reproduce the
+  # validated llama.cpp Q4_K_M run (same span volume; agreement on par with the openrouter-vs-
+  # llamacpp baseline), so it's used here for convenience — no GGUF / llama-server to manage.
+  # Reached over a REVERSE SSH tunnel. One-time on the Mac: `ollama pull qwen3:8b`, then serve:
+  #   OLLAMA_CONTEXT_LENGTH=16384 OLLAMA_KEEP_ALIVE=-1 OLLAMA_NUM_PARALLEL=2 caffeinate -dis ollama serve
+  #   (16384 ctx is REQUIRED — thinking output is long and the default ctx truncates it)
+  # Then keep this tunnel open for the whole run (maps VM 127.0.0.1:11500 -> Mac 127.0.0.1:11434):
+  #   gcloud compute ssh deid-review-vm --zone=europe-north1-b --tunnel-through-iap \
+  #     -- -N -R 11500:localhost:11434 -o ServerAliveInterval=30 -o ServerAliveCountMax=3
   #
-  # COMPLIANCE: patient text is POSTed to base_url, so the GPU server must be YOUR OWN private
-  # endpoint reachable over the private network (e.g. the Azure GPU VM's VNet IP) — never a
-  # public/hosted API. That keeps the run fully offline.
-  #
-  #   ollama    (GPU host):  ollama pull qwen3:8b   -> http://<GPU_HOST>:11434/v1, model qwen3:8b
-  #                          set a large context for long docs: OLLAMA_CONTEXT_LENGTH=16384 (or a Modelfile num_ctx)
-  #   llama.cpp (GPU host):  llama-server -m Qwen3-8B-Q4_K_M.gguf --jinja -c 16384 --port 8089
-  #                          -> http://<GPU_HOST>:8089/v1
-  # - id: qwen3-8b
-  #   runner: llm
-  #   params:
-  #     base_url: http://<GPU_HOST>:11434/v1   # ollama default port; use :8089/v1 for llama.cpp
-  #     model: qwen3:8b                         # ollama tag; for llama.cpp use its served model name
-  #     prompt_dir: prompts       # dict_prompt.txt, dict_example.txt, labels.csv
-  #     thinking: true            # essential: ~14x lower FP than no-think
-  #     workers: 4                # GPU handles concurrency; tune to the box
+  # COMPLIANCE: patient text is POSTed to base_url, so it travels VM -> Mac over the (encrypted)
+  # tunnel — i.e. it LEAVES the VM. Acceptable only because the Mac is the operator's own machine
+  # and the transport is private; never point this at a public/hosted API.
+  - id: qwen3-8b
+    runner: llm
+    params:
+      base_url: http://127.0.0.1:11500/v1   # reverse SSH tunnel -> Mac's Ollama (:11434)
+      model: qwen3:8b                        # Ollama tag; Q4_K_M by default (= the validated quant)
+      prompt_dir: prompts       # dict_prompt.txt, dict_example.txt, labels.csv
+      thinking: true            # essential: ~14x lower FP (Ollama qwen3 thinks by default)
+      max_tokens: 8000          # exact parity with the validated run (runner default is 8192)
+      workers: 2                # needs OLLAMA_NUM_PARALLEL>=2 on the Mac to run both concurrently
 
 postprocess:
   enabled: true

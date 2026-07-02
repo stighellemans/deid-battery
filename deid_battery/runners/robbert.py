@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..progress import track
+from ..checkpoint import ordered, resume_split, track
 from ..schema import make_span
 
 
@@ -129,6 +129,9 @@ def _prepare_window(tok, ids_slice):
 
 
 def run(docs, params):
+    ckpt, todo, by_doc = resume_split(docs, params)
+    if not todo:  # everything already checkpointed -> don't load the model
+        return ordered(docs, by_doc)
     import torch
     from transformers import AutoConfig, AutoModel, AutoTokenizer
 
@@ -184,14 +187,14 @@ def run(docs, params):
     usable = max_len - n_special
     bio_o = bio_labels.index("O") if "O" in bio_labels else 0
 
-    by_doc = {}
-    for d in track(docs, params):
+    for d in track(todo, params):
         text = d["text"]
         enc = tok(text, add_special_tokens=False, return_offsets_mapping=True, verbose=False)
         ids, offs = enc["input_ids"], [tuple(x) for x in enc["offset_mapping"]]
         n = len(ids)
         if n == 0:
             by_doc[d["doc_id"]] = []
+            ckpt.record(d["doc_id"], [])
             continue
         bio_sum = np.zeros((n, num_bio)); ent_sum = np.zeros((n, num_ent)); cnt = np.zeros(n)
         with torch.no_grad():
@@ -208,5 +211,7 @@ def run(docs, params):
         cnt[cnt == 0] = 1
         pb = (bio_sum / cnt[:, None]).argmax(1)
         pe = (ent_sum / cnt[:, None]).argmax(1)
-        by_doc[d["doc_id"]] = _decode(pb, pe, offs, text, bio_labels, ent_labels, bio_o)
-    return by_doc
+        spans = _decode(pb, pe, offs, text, bio_labels, ent_labels, bio_o)
+        by_doc[d["doc_id"]] = spans
+        ckpt.record(d["doc_id"], spans)
+    return ordered(docs, by_doc)
