@@ -18,6 +18,20 @@ from ..schema import make_span
 # word/punctuation tokens, ~matching GLiNER's word splitter, for token-sized windows
 _TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 
+
+def _device(name):
+    # Mirror runners/robbert._device: explicit "cpu" stays CPU; None/"auto"/"" auto-
+    # detects (cuda > mps > cpu); an explicit "mps"/"cuda" is honoured as given.
+    import torch
+    if name in (None, "auto", "", "cpu") and name != "cpu":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        mps = getattr(torch.backends, "mps", None)
+        if mps is not None and mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
+    return torch.device(name or "cpu")
+
 DEFAULT_LABEL_MAP = {
     "person": "Name", "name": "Name",
     "organization": "Organization", "hospital": "Organization", "healthcare institution": "Organization",
@@ -58,6 +72,9 @@ def run(docs, params):
 
     model = GLiNER.from_pretrained(params.get("model", "urchade/gliner_multi_pii-v1"))
     model.eval()
+    # GLiNER.predict_entities runs on the model's device, so moving the model is
+    # enough (it tokenises + places tensors internally). Default None auto-detects.
+    model.to(_device(params.get("device")))
     threshold = params.get("threshold", 0.5)
     label_map = {k.lower(): v for k, v in (params.get("label_map") or DEFAULT_LABEL_MAP).items()}
     labels = list(label_map)

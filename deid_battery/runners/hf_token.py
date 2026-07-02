@@ -37,6 +37,20 @@ DEFAULT_LABEL_MAP = {
 _BIOES = ("B-", "I-", "E-", "S-")
 
 
+def _device(name):
+    # Mirror runners/robbert._device: explicit "cpu" stays CPU; None/"auto"/"" auto-
+    # detects (cuda > mps > cpu); an explicit "mps"/"cuda" is honoured as given.
+    import torch
+    if name in (None, "auto", "", "cpu") and name != "cpu":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        mps = getattr(torch.backends, "mps", None)
+        if mps is not None and mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
+    return torch.device(name or "cpu")
+
+
 def _windows(text, size=1400, overlap=250):
     if len(text) <= size:
         yield 0, text
@@ -64,10 +78,11 @@ def _trim(b, e, text):
     return b, e
 
 
-def _predict_chunk(model, tok, chunk, torch):
+def _predict_chunk(model, tok, chunk, torch, device):
     enc = tok(chunk, return_offsets_mapping=True, return_tensors="pt",
               truncation=True, max_length=512)
     offs = enc.pop("offset_mapping")[0].tolist()
+    enc = {k: v.to(device) for k, v in enc.items()}  # inputs must sit on the model's device
     with torch.no_grad():
         probs = model(**enc).logits[0].softmax(-1)
     ids = probs.argmax(-1).tolist()
@@ -117,13 +132,15 @@ def run(docs, params):
     tok = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForTokenClassification.from_pretrained(
         model_id, trust_remote_code=params.get("trust_remote_code", True)).eval()
+    device = _device(params.get("device"))
+    model.to(device)
     label_map = {k.lower(): v for k, v in (params.get("label_map") or DEFAULT_LABEL_MAP).items()}
 
     for d in track(todo, params):
         text = d["text"]
         best: dict[tuple, dict] = {}
         for offset, chunk in _windows(text):
-            for s in _predict_chunk(model, tok, chunk, torch):
+            for s in _predict_chunk(model, tok, chunk, torch, device):
                 label = label_map.get(s["label"].lower())
                 if not label:
                     continue
