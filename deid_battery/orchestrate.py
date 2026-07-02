@@ -104,7 +104,7 @@ def _docs_with_meta(docs, metas):
     return [{**d, "_meta": (metas or {}).get(d["doc_id"])} for d in docs]
 
 
-def run(config_path, only=None, skip_existing=False, no_run=False):
+def run(config_path, only=None, skip_existing=False, no_run=False, device=None, batch_size=None):
     cfg = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
     out = Path(cfg.get("output_dir", "out"))
     out.mkdir(parents=True, exist_ok=True)
@@ -119,7 +119,7 @@ def run(config_path, only=None, skip_existing=False, no_run=False):
     metas_by_cond = {c["id"]: {d["doc_id"]: md_mod.resolve(d, c["metadata"]) for d in docs}
                      for c in conditions}
 
-    device = cfg.get("device")
+    device = device or cfg.get("device")  # CLI --device overrides the config's device
     pp_cfg = cfg.get("postprocess", {"enabled": True})
     texts = {d["doc_id"]: d["text"] for d in docs}
     only = set(only) if only else None
@@ -149,6 +149,8 @@ def run(config_path, only=None, skip_existing=False, no_run=False):
             params = dict(m.get("params") or {})
             if device and "device" not in params:
                 params["device"] = device
+            if batch_size is not None and "batch_size" not in params:
+                params["batch_size"] = batch_size  # CLI --batch-size (neural runners; ignored by rule-based)
             params["_label"] = tag  # progress-bar label (see deid_battery.progress.track)
             # Per-document checkpoint: the expensive runners (deidentify, llm) append
             # each finished doc here and resume from it after an interruption. It is
@@ -285,7 +287,7 @@ def run(config_path, only=None, skip_existing=False, no_run=False):
             try:
                 if plot_time_vs_recall(payload, timings, str(out / tv_name),
                                        meta_sids, sid_model, sid_label) is not None:
-                    print(f"plot -> {out / tv_name}")
+                    print(f"plot -> {out / tv_name}  (data -> {(out / tv_name).with_suffix('.csv').name})")
                 else:
                     print(f"  [{tv_name}] skipped: no (time, recall) pairs -- "
                           f"add run times to {timings_path}", flush=True)
@@ -303,7 +305,7 @@ def run(config_path, only=None, skip_existing=False, no_run=False):
                 continue
             try:
                 if fn(payload, str(out / name)) is not None:
-                    print(f"plot -> {out / name}")
+                    print(f"plot -> {out / name}  (data -> {(out / name).with_suffix('.csv').name})")
             except Exception as e:  # noqa: BLE001
                 print(f"  [{name}] skipped: {type(e).__name__}: {str(e)[:120]}")
 
@@ -320,9 +322,16 @@ def main():
                     help="run no models; re-apply post-processing from raw, then re-evaluate + re-plot. "
                          "Tune `postprocess:`/`conditions:` (Channel-2 metadata) + --no-run to compare without "
                          "re-running -- except deduce, whose metadata enters at inference (re-run with --only deduce).")
+    ap.add_argument("--device", default=None,
+                    help="override the config's device for this run (cpu | mps | cuda). "
+                         "Measured times land under the matching cpu/gpu row in timings.yaml.")
+    ap.add_argument("--batch-size", type=int, default=None, dest="batch_size",
+                    help="windows/docs per forward pass for the neural runners (default 1). "
+                         ">1 pools work across docs for a fair GPU timing; verified span-identical.")
     a = ap.parse_args()
     only = [s.strip() for s in a.only.split(",") if s.strip()] if a.only else None
-    run(a.config, only=only, skip_existing=a.skip_existing, no_run=a.no_run)
+    run(a.config, only=only, skip_existing=a.skip_existing, no_run=a.no_run,
+        device=a.device, batch_size=a.batch_size)
 
 
 if __name__ == "__main__":

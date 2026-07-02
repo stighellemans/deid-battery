@@ -12,6 +12,23 @@ _VENDOR = Path(__file__).resolve().parent / "_vendor"
 sys.path.insert(0, str(_VENDOR))
 
 
+def _csv_beside(out_path):
+    """The numerical twin of a figure path: same name, ``.csv`` for ``.png`` (so
+    every plot lands next to the exact numbers it draws). ``None`` -> ``None``."""
+    return None if out_path is None else Path(out_path).with_suffix(".csv")
+
+
+def _recall_matrix_to_frame(matrix, counts, row_name, count_name):
+    """Flatten the (row-label x source) recall matrix behind a heatmap into a
+    saveable frame: the row label, its gold count (the number shown in the
+    heatmap's y-tick), then one recall column per source -- rows kept in the
+    plotted order (worst mean recall first)."""
+    frame = matrix.reset_index()
+    frame.columns = [row_name, *frame.columns[1:]]
+    frame.insert(1, count_name, [int(counts.get(r, 0)) for r in matrix.index])
+    return frame
+
+
 def plot(payload: dict, out_path):
     import evaluation_plots as ep
 
@@ -69,6 +86,15 @@ def plot_time_vs_recall(payload: dict, timings: dict, out_path,
     if not rows:
         return None
     df = pd.DataFrame(rows)
+
+    # Numerical twin of the scatter: one row per plotted dot (method, its run time,
+    # recall, device, and whether the time was measured or hand-added).
+    csv_path = _csv_beside(out_path)
+    if csv_path is not None:
+        (df.rename(columns={"name": "method", "source": "timing_source"})
+           [["method", "seconds", "recall", "device", "timing_source"]]
+           .sort_values(["recall", "seconds"], ascending=[False, True])
+           .to_csv(csv_path, index=False))
 
     devices = list(dict.fromkeys(df["device"]))
     base = {"cpu": "#4c72b0", "gpu": "#dd8452"}
@@ -141,6 +167,10 @@ def plot_recall_by_gold_label(payload: dict, out_path):
         metric_key="essential_recall", count_key="gold_span_count")
     if matrix.empty:
         return None
+    csv_path = _csv_beside(out_path)
+    if csv_path is not None:
+        _recall_matrix_to_frame(matrix, counts, "gold_label", "gold_span_count").to_csv(
+            csv_path, index=False)
     return ep.plot_recall_heatmap(matrix, counts, "Essential recall by gold label",
                                   "spans", output_path=out_path)
 
@@ -154,5 +184,9 @@ def plot_recall_by_subannotation_category(payload: dict, out_path):
         row_filter=ep._is_plottable_subannotation_category)
     if matrix.empty:
         return None
+    csv_path = _csv_beside(out_path)
+    if csv_path is not None:
+        _recall_matrix_to_frame(matrix, counts, "category", "total_chars").to_csv(
+            csv_path, index=False)
     return ep.plot_recall_heatmap(matrix, counts, "Recall by subannotation category",
                                   "chars", output_path=out_path)
