@@ -20,11 +20,13 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import yaml
 
 from . import metadata as md_mod
+from . import timing as timing_mod
 from .inputs import load_input
 from .postprocess import post_process
 from .runners import get_runner, uses_metadata_at_inference
@@ -106,6 +108,9 @@ def run(config_path, only=None, skip_existing=False, no_run=False):
     cfg = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
     out = Path(cfg.get("output_dir", "out"))
     out.mkdir(parents=True, exist_ok=True)
+    # Where per-method run times are recorded (see deid_battery.timing). Kept OUT of
+    # out/ by default so hand-added `manual` rows survive an out/ wipe.
+    timings_path = cfg.get("timings", "timings.yaml")
 
     docs = load_input(cfg["input"])
     conditions = _conditions(cfg)
@@ -155,6 +160,7 @@ def run(config_path, only=None, skip_existing=False, no_run=False):
             params["_checkpoint"] = str(ckpt_p.resolve())
             metas = metas_by_cond[cid] if sensitive else None  # raw is meta-neutral otherwise
             print(f"[{tag}] running ({runner})...", flush=True)
+            t0 = time.perf_counter()
             try:
                 rdocs = _docs_with_meta(docs, metas)
                 if m.get("venv"):
@@ -163,7 +169,15 @@ def run(config_path, only=None, skip_existing=False, no_run=False):
                     by = get_runner(runner)(rdocs, params)
                 write_by_doc(raw_p, by)
                 ckpt_p.unlink(missing_ok=True)  # raw.jsonl now supersedes the partial
-                print(f"[{tag}] {sum(len(v) for v in by.values())} raw spans -> {raw_p}", flush=True)
+                elapsed = time.perf_counter() - t0
+                # Record wall-clock under the model id (device auto-labelled cpu/gpu).
+                # Timing is shared across conditions just like raw; for per-condition
+                # runners (deduce) the last condition's time wins -- negligibly different.
+                timing_mod.record_measured(
+                    timings_path, mid, timing_mod.measured_device(m, params),
+                    elapsed, n_docs=len(docs))
+                print(f"[{tag}] {sum(len(v) for v in by.values())} raw spans "
+                      f"in {elapsed:.1f}s -> {raw_p}", flush=True)
             except Exception as e:  # one model must not abort the whole battery (e.g. LLM endpoint down)
                 failed.append((tag, f"{type(e).__name__}: {str(e)[:160]}"))
                 print(f"[{tag}] FAILED, skipping: {failed[-1][1]}", flush=True)
@@ -195,6 +209,9 @@ def run(config_path, only=None, skip_existing=False, no_run=False):
     # is excluded with a warning so partial coverage never skews the scores. ---
     input_ids = {str(d["doc_id"]) for d in docs}
     by_doc_paths, names, order = {}, {}, []
+    # source id -> model id / condition id / bare method name (for the time-vs-recall plot,
+    # whose point labels drop the condition suffix -- every point is "with metadata").
+    sid_model, sid_cid, sid_label = {}, {}, {}
     for m in cfg["models"]:
         nm = m.get("name", m["id"])
         for c in conditions:
@@ -211,7 +228,13 @@ def run(config_path, only=None, skip_existing=False, no_run=False):
                 continue
             by_doc_paths[sid] = str(bp)
             names[sid] = f"{nm} ({c['name']})" if c["name"] else nm
+            sid_model[sid], sid_cid[sid], sid_label[sid] = m["id"], cid, nm
             order.append(sid)
+
+    # "With metadata" = conditions whose metadata source isn't 'none' (the time-vs-
+    # recall plot uses these). Fall back to every condition if none qualify.
+    meta_cids = {c["id"] for c in conditions
+                 if (c["metadata"] or {}).get("source", "none") != "none"} or {c["id"] for c in conditions}
 
     # Single-condition only: optional raw-vs-postprocess overlay ("<id>__raw").
     if not multi and pp_cfg.get("enabled", True) and pp_cfg.get("compare"):
@@ -237,16 +260,37 @@ def run(config_path, only=None, skip_existing=False, no_run=False):
     if ev.get("enabled"):
         from .evaluate import evaluate as run_eval
         from .plot import plot as run_plot
+        timings = timing_mod.load(timings_path)
         doclens = {d["doc_id"]: len(d["text"]) for d in docs}
         payload = run_eval(by_doc_paths, ev["bundle"], doclens,
                            ev.get("ignore_categories"), names, order, out)
         (out / "quantity_payload.json").write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         summary = run_plot(payload, str(out / ev.get("plot", "recall_fp_burden.png")))
+        # Record each source's measured run time (from timings.yaml) in summary.csv too.
+        summary["measured_seconds"] = summary["annotation_id"].map(
+            lambda s: timing_mod.measured_seconds(timings.get(sid_model.get(str(s), str(s)), [])))
         summary.to_csv(out / "summary.csv", index=False)
-        cols = ["source", "essential_recall", "total_fp_fraction_of_non_pii", "prediction_span_count"]
+        cols = ["source", "essential_recall", "total_fp_fraction_of_non_pii",
+                "prediction_span_count", "measured_seconds"]
         print(summary[[c for c in cols if c in summary.columns]].to_string(index=False))
         print(f"\nplot -> {out / ev.get('plot', 'recall_fp_burden.png')}")
+
+        # Time vs. recall (with-metadata condition), one dot per timings row, coloured
+        # by device (cpu/gpu). Needs at least one (measured or manual) row in timings.yaml.
+        tv_name = ev.get("plot_time_vs_recall", "time_vs_recall.png")
+        if tv_name and timings:
+            from .plot import plot_time_vs_recall
+            meta_sids = {sid for sid in order if sid_cid.get(sid) in meta_cids}
+            try:
+                if plot_time_vs_recall(payload, timings, str(out / tv_name),
+                                       meta_sids, sid_model, sid_label) is not None:
+                    print(f"plot -> {out / tv_name}")
+                else:
+                    print(f"  [{tv_name}] skipped: no (time, recall) pairs -- "
+                          f"add run times to {timings_path}", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"  [{tv_name}] skipped: {type(e).__name__}: {str(e)[:120]}")
 
         from .plot import plot_recall_by_gold_label, plot_recall_by_subannotation_category
         for key, default, fn in (

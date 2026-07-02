@@ -30,6 +30,11 @@
 input: input.jsonl
 output_dir: out
 device: cpu                    # CPU is the intended, reproducible mode; no CUDA needed
+# Per-method run times, recorded here after each run (device auto-labelled cpu/gpu).
+# Hand-add rows for other hardware -- e.g. a GPU time measured elsewhere -- and they
+# survive re-runs; a CPU run only ever updates the cpu `measured` row. Drives
+# time_vs_recall.png. Kept out of out/ so hand-added rows aren't wiped.
+timings: timings.yaml
 
 metadata:
   source: from_input          # oracle patient/caregiver names baked into input.jsonl by the pre-step
@@ -79,7 +84,9 @@ models:
   - id: deidentify
     runner: deidentify
     venv: .venv-deidentify      # built by: scripts/setup.sh --deidentify (amd64 Linux, CPU)
-    params: {model: model_bilstmcrf_ons_large-v0.2.0, chunk: 50}
+    # max_chars windows long docs so one huge doc can't OOM the box (a 94 KB doc
+    # spiked a 15 GB VM past its ceiling); overlap catches boundary entities.
+    params: {model: model_bilstmcrf_ons_large-v0.2.0, chunk: 50, max_chars: 20000, overlap: 500}
 
   # LLM (Qwen) — served by Ollama on the operator's Mac. Empirically verified to reproduce the
   # validated llama.cpp Q4_K_M run (same span volume; agreement on par with the openrouter-vs-
@@ -96,6 +103,7 @@ models:
   # and the transport is private; never point this at a public/hosted API.
   - id: qwen3-8b
     runner: llm
+    device_label: gpu           # compute is a REMOTE GPU (Ollama on the Mac); colour its time-vs-recall dot GPU
     params:
       base_url: http://127.0.0.1:11500/v1   # reverse SSH tunnel -> Mac's Ollama (:11434)
       model: qwen3:8b                        # Ollama tag; Q4_K_M by default (= the validated quant)
@@ -115,3 +123,4 @@ evaluate:
   bundle: evaluation_bundle     # the deid-eval-annotator gold bundle placed on the VM
   ignore_categories: [formatting, additional_info, medical_info, time, title]
   plot: recall_fp_burden.png
+  plot_time_vs_recall: time_vs_recall.png   # run time vs recall (with metadata), dots coloured by device

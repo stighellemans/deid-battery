@@ -12,16 +12,18 @@ config::
       venv: /opt/deidentify-venv          # the py3.9 amd64 env
       params: {model: model_bilstmcrf_ons_large-v0.2.0, chunk: 50}
 
-Memory (measured, amd64 CPU): this runner has a FLAT ~8.7 GB footprint that is
-empirically insensitive to document length, count, vocabulary, sentence length,
-mini_batch_size, and windowing (all tested, up to 200 KB docs / 40-doc batches).
-So `chunk`, `max_chars` and `mini_batch_size` do NOT reduce peak RAM — an OOM
-above ~9 GB is box concurrency (e.g. VS Code's remote server co-resident with
-this), not the runner growing. To run it safely: give the box headroom above
-~9 GB and/or contain it in a memory-capped cgroup (systemd-run --property
-MemoryMax=…). `chunk` still runs the corpus in fresh subprocesses (nice for fault
-isolation / progress) but is not a memory lever; `mini_batch_size=32` (default)
-is ~30% faster than deidentify's 256 at the same memory.
+Memory (measured, amd64 CPU): the model baseline is ~8.7 GB, but a SINGLE large
+document processed in one annotate() call spikes well above that — observed on
+real data: a 94 KB doc pushed a 15 GB box past its ceiling and was OOM-killed
+(SIGKILL), while docs up to ~54 KB ran fine, so the spike is nonlinear in length.
+`max_chars` IS the lever: it windows long docs (with `overlap`; duplicate spans
+deduped by (begin,end,label)) so no single annotate() call blows up. Set
+`max_chars: 20000` for real corpora — most docs fit one window, so the cost is
+negligible (see run() below). `chunk` and `mini_batch_size` are NOT memory levers
+(each chunk reloads the same ~8.7 GB model; `chunk` only gives fault isolation,
+progress, and per-doc checkpoint boundaries). Also give the box headroom above
+~9 GB — the OOM killer is instant when there is no swap. `mini_batch_size=32`
+(default) is ~30% faster than deidentify's 256 at the same memory.
 """
 from __future__ import annotations
 
@@ -113,20 +115,22 @@ def _annotate(docs, params):
     model_name = params.get("model", DEFAULT_MODEL)
     label_map = {**DEFAULT_LABEL_MAP, **(params.get("label_map") or {})}
     tokenizer = TokenizerFactory().tokenizer(corpus="ons", disable=("tagger", "ner"))
-    # NOTE: this runner's memory footprint is a FLAT ~8.7 GB on CPU, empirically
-    # insensitive to doc length, count, vocabulary, sentence length, mini_batch_size
-    # AND windowing (measured on an amd64 VM across all of these). So neither knob
-    # below reduces peak RAM — a >8.7 GB OOM is box concurrency (e.g. VS Code's
-    # remote server + this), not the runner. Contain it with a cgroup cap and give
-    # the box headroom above ~9 GB.
+    # NOTE: model baseline is ~8.7 GB on CPU, but a single LARGE doc in one
+    # annotate() call spikes well above that (a 94 KB doc OOM-killed a 15 GB box;
+    # ~54 KB docs were fine — nonlinear in length). `max_chars` (below) windows
+    # long docs to bound this and IS the memory lever for real corpora; `chunk`
+    # and `mini_batch_size` are not (each chunk reloads the same model). Give the
+    # box headroom above ~9 GB; the OOM killer is instant when there's no swap.
     #
     # mini_batch_size: deidentify defaults to 256; 32 is the same memory but ~30%
     # FASTER on CPU (256 wastes time on padding), so it's the default here for speed.
     mbs = int(params.get("mini_batch_size", 32) or 32)
     tagger = FlairTagger(model=model_name, tokenizer=tokenizer, mini_batch_size=mbs, verbose=False)
 
-    # Optional opt-in safety net for a pathological single multi-KB unbroken line;
-    # does NOT lower the ~8.7 GB footprint, so default OFF (0). Set e.g. 20000 to enable.
+    # Window long docs so no single annotate() call spikes RAM into an OOM (see the
+    # module docstring — a 94 KB doc killed a 15 GB box). Default OFF (0) for
+    # back-compat; set e.g. 20000 for real corpora — most docs fit one window, so the
+    # cost is negligible. overlap catches boundary entities; dupes deduped downstream.
     max_chars = int(params.get("max_chars", 0) or 0)
     overlap = int(params.get("overlap", 500))
 

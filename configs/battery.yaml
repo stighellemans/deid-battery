@@ -7,6 +7,11 @@
 input: input.jsonl
 output_dir: out
 device: cpu                    # cpu | mps | cuda (cpu is safe + reproducible on this Mac)
+# Per-method run times, recorded here after each run (device auto-labelled cpu/gpu).
+# Hand-add rows for other hardware (e.g. a GPU time measured elsewhere) and they
+# survive re-runs; a CPU run only ever updates the cpu `measured` row. Drives
+# time_vs_recall.png. Kept out of out/ so hand-added rows aren't wiped.
+timings: timings.yaml
 
 metadata:
   source: from_input          # oracle patient/caregiver names baked into input.jsonl
@@ -45,16 +50,15 @@ models:
   - id: synthetic
     runner: robbert
     params:
-      checkpoint: /Users/stighellemans/Desktop/DEID/open-deid/models/deid-robbert-synthetic-all-cleaned-training-ready-holdout300-6393-earlystop-gold-mps-newdates/best.pt
+      checkpoint: /Users/stighellemans/Desktop/DEID/open-deid/models/deid-robbert-synthetic-all-cleaned-training-ready-holdout300-6393-fulltrain-refit-mps-newdates/best.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
-      # Same 15-label set AND order as uza (verified identical), so inline them instead of
-      # linking train_metrics.json -> one fewer file to copy. NOTE: the runner checks label
-      # COUNT, not order; fine for this frozen checkpoint. If synthetic is ever retrained with a
-      # different label order, re-inline from that run's train_metrics.json.
+      # 14-label head: Stage-2 fulltrain-refit, retrofitted 15->14 (retired Organization:Patient
+      # row dropped). The runner checks label COUNT, so this must be 14.
+      # NOTE: the uza runner above stays 15 — that model will be replaced, not trimmed.
       entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
                       Age_Birthdate, Contactdetails, Date, ID:Caregiver, ID:Patient, Name:Caregiver,
                       Name:Other, Name:Patient, Organization:Healthcare, Organization:Other,
-                      Organization:Patient, Profession]
+                      Profession]
 
   # LLM (Qwen) — needs a running OpenAI-compatible endpoint. None is up by default
   # on this Mac; start one, e.g.:
@@ -63,6 +67,7 @@ models:
   # then uncomment. Thinking ON is essential (~14x lower FP than no-think).
   # - id: qwen3-8b
   #   runner: llm
+  #   device_label: gpu         # remote GPU endpoint -> colour its time-vs-recall dot GPU
   #   params:
   #     base_url: http://127.0.0.1:11434/v1
   #     model: qwen3:8b
@@ -90,3 +95,4 @@ evaluate:
   bundle: evaluation_bundle    # symlink -> ../deid-evaluation/evaluation_bundle (300-doc gold)
   ignore_categories: [formatting, additional_info, medical_info, time, title]
   plot: recall_fp_burden.png
+  plot_time_vs_recall: time_vs_recall.png   # run time vs recall (with metadata), dots coloured by device
