@@ -11,12 +11,13 @@ config::
         base_model: DTAI-KULeuven/robbert-2023-dutch-base
         train_metrics: /path/to/train_metrics.json   # supplies bio_labels/entity_labels
         # or set explicitly: entity_labels: [...]   bio_labels: [O, B, I]
-        max_length: 256
+        max_length: 512
         overlap: 64
 """
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +36,32 @@ def _device(name):
             return torch.device("mps")
         return torch.device("cpu")
     return torch.device(name or "cpu")
+
+
+def _resolved_batch_size(requested, device):
+    """Resolve 0/None to a conservative accelerator-specific batch size."""
+    value = int(requested or 0)
+    if value > 0:
+        return value
+    device_type = getattr(device, "type", str(device)).lower()
+    if device_type == "cuda":
+        return 16
+    if device_type == "mps":
+        return 8
+    return 1
+
+
+def _is_out_of_memory(exc):
+    message = str(exc).lower()
+    return "out of memory" in message or "mps backend out of memory" in message
+
+
+def _empty_device_cache(torch, device):
+    device_type = getattr(device, "type", str(device)).lower()
+    if device_type == "cuda":
+        torch.cuda.empty_cache()
+    elif device_type == "mps" and hasattr(torch, "mps"):
+        torch.mps.empty_cache()
 
 
 def _windows(n, usable, overlap):
@@ -178,7 +205,7 @@ def run(docs, params):
         raise RuntimeError(f"checkpoint mismatch: missing={missing} unexpected={unexpected}")
     model.to(device).eval()
 
-    max_len = int(params.get("max_length", 256))
+    max_len = int(params.get("max_length", 512))
     overlap = int(params.get("overlap", 64))
     try:
         n_special = int(tok.num_special_tokens_to_add(pair=False))
@@ -187,31 +214,106 @@ def run(docs, params):
     usable = max_len - n_special
     bio_o = bio_labels.index("O") if "O" in bio_labels else 0
 
-    for d in track(todo, params):
-        text = d["text"]
-        enc = tok(text, add_special_tokens=False, return_offsets_mapping=True, verbose=False)
-        ids, offs = enc["input_ids"], [tuple(x) for x in enc["offset_mapping"]]
-        n = len(ids)
-        if n == 0:
-            by_doc[d["doc_id"]] = []
-            ckpt.record(d["doc_id"], [])
-            continue
-        bio_sum = np.zeros((n, num_bio)); ent_sum = np.zeros((n, num_ent)); cnt = np.zeros(n)
+    batch_size = _resolved_batch_size(params.get("batch_size"), device)
+
+    if batch_size <= 1:
+        # Default path: one window per forward pass. Left UNCHANGED so non-batched
+        # runs are byte-identical to before batching existed.
+        for d in track(todo, params):
+            text = d["text"]
+            enc = tok(text, add_special_tokens=False, return_offsets_mapping=True, verbose=False)
+            ids, offs = enc["input_ids"], [tuple(x) for x in enc["offset_mapping"]]
+            n = len(ids)
+            if n == 0:
+                by_doc[d["doc_id"]] = []
+                ckpt.record(d["doc_id"], [])
+                continue
+            bio_sum = np.zeros((n, num_bio)); ent_sum = np.zeros((n, num_ent)); cnt = np.zeros(n)
+            with torch.no_grad():
+                for s, e in _windows(n, usable, overlap):
+                    sl = ids[s:e]
+                    packed, special = _prepare_window(tok, sl)
+                    inp = torch.tensor([packed], device=device)
+                    att = torch.ones_like(inp)
+                    bl, ll = model(input_ids=inp, attention_mask=att)
+                    mask = np.array(special, dtype=bool)
+                    bio_sum[s:e] += bl[0].cpu().numpy()[~mask]
+                    ent_sum[s:e] += ll[0].cpu().numpy()[~mask]
+                    cnt[s:e] += 1
+            cnt[cnt == 0] = 1
+            pb = (bio_sum / cnt[:, None]).argmax(1)
+            pe = (ent_sum / cnt[:, None]).argmax(1)
+            spans = _decode(pb, pe, offs, text, bio_labels, ent_labels, bio_o)
+            by_doc[d["doc_id"]] = spans
+            ckpt.record(d["doc_id"], spans)
+        return ordered(docs, by_doc)
+
+    # Batched accelerator path: pad+mask `batch_size` windows -- pooled
+    # ACROSS docs so short docs don't waste the GPU -- into one forward pass, then
+    # scatter each window's real-token logits back. Padding is masked out (att=0) and
+    # sliced off, so real-token logits (hence spans) match the per-window path; only
+    # the number/size of GPU calls changes. Docs are buffered `batch_docs` at a time to
+    # bound RAM, and still checkpointed per doc as each completes.
+    batch_docs = max(batch_size, int(params.get("batch_docs", 64)))
+    print(f"  [{params.get('_label') or 'robbert'}] {device.type} inference: "
+          f"batch_size={batch_size}, batch_docs={batch_docs}", file=sys.stderr, flush=True)
+    pad_id = tok.pad_token_id if tok.pad_token_id is not None else 0
+
+    def _forward(packed_list):
+        maxlen = max(len(p) for p in packed_list)
+        inp = torch.full((len(packed_list), maxlen), pad_id, dtype=torch.long)
+        att = torch.zeros((len(packed_list), maxlen), dtype=torch.long)
+        for j, p in enumerate(packed_list):
+            inp[j, :len(p)] = torch.tensor(p, dtype=torch.long); att[j, :len(p)] = 1
         with torch.no_grad():
-            for s, e in _windows(n, usable, overlap):
-                sl = ids[s:e]
-                packed, special = _prepare_window(tok, sl)
-                inp = torch.tensor([packed], device=device)
-                att = torch.ones_like(inp)
-                bl, ll = model(input_ids=inp, attention_mask=att)
-                mask = np.array(special, dtype=bool)
-                bio_sum[s:e] += bl[0].cpu().numpy()[~mask]
-                ent_sum[s:e] += ll[0].cpu().numpy()[~mask]
-                cnt[s:e] += 1
-        cnt[cnt == 0] = 1
-        pb = (bio_sum / cnt[:, None]).argmax(1)
-        pe = (ent_sum / cnt[:, None]).argmax(1)
-        spans = _decode(pb, pe, offs, text, bio_labels, ent_labels, bio_o)
-        by_doc[d["doc_id"]] = spans
-        ckpt.record(d["doc_id"], spans)
+            bl, ll = model(input_ids=inp.to(device), attention_mask=att.to(device))
+        return bl.cpu().numpy(), ll.cpu().numpy()
+
+    def _results():
+        active_batch_size = batch_size
+        for gi in range(0, len(todo), batch_docs):
+            group = todo[gi:gi + batch_docs]
+            prepared, acc, work = [], {}, []
+            for d in group:
+                enc = tok(d["text"], add_special_tokens=False, return_offsets_mapping=True, verbose=False)
+                ids, offs = enc["input_ids"], [tuple(x) for x in enc["offset_mapping"]]
+                n = len(ids)
+                prepared.append((d, n, offs))
+                acc[d["doc_id"]] = [np.zeros((n, num_bio)), np.zeros((n, num_ent)), np.zeros(n)]
+                for s, e in _windows(n, usable, overlap):
+                    packed, special = _prepare_window(tok, ids[s:e])
+                    work.append((d["doc_id"], s, e, special, packed))
+            bi = 0
+            while bi < len(work):
+                chunk = work[bi:bi + active_batch_size]
+                try:
+                    bl, ll = _forward([w[4] for w in chunk])
+                except RuntimeError as exc:
+                    if not _is_out_of_memory(exc) or len(chunk) <= 1:
+                        raise
+                    active_batch_size = max(1, len(chunk) // 2)
+                    _empty_device_cache(torch, device)
+                    print(f"  [{params.get('_label') or 'robbert'}] {device.type} memory limit; "
+                          f"retrying with batch_size={active_batch_size}",
+                          file=sys.stderr, flush=True)
+                    continue
+                for j, (doc_id, s, e, special, packed) in enumerate(chunk):
+                    keep = ~np.array(special, dtype=bool)
+                    acc[doc_id][0][s:e] += bl[j, :len(packed)][keep]
+                    acc[doc_id][1][s:e] += ll[j, :len(packed)][keep]
+                    acc[doc_id][2][s:e] += 1
+                bi += len(chunk)
+            for d, n, offs in prepared:
+                bio_sum, ent_sum, cnt = acc[d["doc_id"]]
+                if n == 0:
+                    yield d["doc_id"], []
+                    continue
+                cnt[cnt == 0] = 1
+                pb = (bio_sum / cnt[:, None]).argmax(1)
+                pe = (ent_sum / cnt[:, None]).argmax(1)
+                yield d["doc_id"], _decode(pb, pe, offs, d["text"], bio_labels, ent_labels, bio_o)
+
+    for doc_id, spans in track(_results(), params, total=len(todo)):
+        by_doc[doc_id] = spans
+        ckpt.record(doc_id, spans)
     return ordered(docs, by_doc)
