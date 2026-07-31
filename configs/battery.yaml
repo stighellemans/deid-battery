@@ -118,7 +118,7 @@ models:
     device_label: gpu
     params:
       base_url: http://127.0.0.1:11500/v1
-      model: qwen3:8b-q4_K_M
+      model: qwen3:8b  # GGUF Q4_K_M; verify/record digest separately
       prompt_dir: prompts
       temperature: 0.6
       top_p: 0.95
