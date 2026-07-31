@@ -98,6 +98,9 @@ python -m venv .venv-pf
 
 ## Use
 
+Detailed field rationale and machine-specific commands are in
+[docs/configuration.md](docs/configuration.md).
+
 ```bash
 # 1. turn your source JSONL into battery input {doc_id, text, [metadata]}.
 #    Either pass flags, or put the field mapping in the config's `adapter:` block:
