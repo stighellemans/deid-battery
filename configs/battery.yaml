@@ -1,12 +1,14 @@
 # Full production config: all 300 gold docs, every system, both metadata
 # conditions, full post-process + eval + plot. Wired to the real assets on this
 # machine. Build the input first (oracle metadata baked in), then run:
-#   python scripts/build_input_from_gold.py --out input.jsonl
+#   python scripts/build_input_from_gold.py \
+#       --gold ../synthetic-deid-dataset/data/benchmark.v2.2.jsonl \
+#       --out input.jsonl
 #   PYTHONPATH=.. <open-deid venv python> -m deid_battery.orchestrate run \
 #       --config configs/battery.yaml
 input: input.jsonl
 output_dir: out
-device: cpu                    # cpu | mps | cuda (cpu is safe + reproducible on this Mac)
+device: cpu # cpu | mps | cuda (cpu is safe + reproducible on this Mac)
 # Per-method run times, recorded here after each run (device auto-labelled cpu/gpu).
 # Hand-add rows for other hardware (e.g. a GPU time measured elsewhere) and they
 # survive re-runs; a CPU run only ever updates the cpu `measured` row. Drives
@@ -14,57 +16,94 @@ device: cpu                    # cpu | mps | cuda (cpu is safe + reproducible on
 timings: timings.yaml
 
 metadata:
-  source: from_input          # oracle patient/caregiver names baked into input.jsonl
+  source: from_input # oracle patient/caregiver names baked into input.jsonl
 
 conditions:
-  - {id: nometa, name: "no metadata", metadata: {source: none}}
-  - {id: meta,   name: "with metadata"}
+  - { id: nometa, name: "no metadata", metadata: { source: none } }
+  - { id: meta, name: "with metadata" }
 
 models:
   - id: belgian-deduce
     runner: deduce
-    params: {engine: belgian-deduce}
+    params: { engine: belgian-deduce }
   - id: deduce
     runner: deduce
-    params: {engine: deduce}
+    params: { engine: deduce }
   - id: gliner-pii
     runner: gliner
-    params: {model: urchade/gliner_multi_pii-v1, threshold: 0.5}
+    params:
+      model: urchade/gliner_multi_pii-v1
+      revision: 1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d
+      threshold: 0.5
   - id: openai-privacy-filter
     runner: hf_token
-    venv: /Users/stighellemans/Desktop/DEID/gold-testset-validation/model_spans/.venv-pf
-    params: {model: openai/privacy-filter}
+    venv: .venv-pf
+    params:
+      model: openai/privacy-filter
+      revision: 7ffa9a043d54d1be65afb281eddf0ffbe629385b
   - id: openmed-multilingual
     runner: hf_token
-    venv: /Users/stighellemans/Desktop/DEID/gold-testset-validation/model_spans/.venv-pf
-    params: {model: OpenMed/privacy-filter-multilingual}
+    venv: .venv-pf
+    params:
+      model: OpenMed/privacy-filter-multilingual
+      revision: f914f18d909d541d288dfda44a4d0b6bdb638d57
   - id: uza
     runner: robbert
     params:
-      checkpoint: /Users/stighellemans/Desktop/DEID/azure-vm-server-lean/model/model.pt
+      checkpoint: models/uza/model.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
-      entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
-                      Age_Birthdate, Contactdetails, Date, ID:Caregiver, ID:Patient, Name:Caregiver,
-                      Name:Other, Name:Patient, Organization:Healthcare, Organization:Other,
-                      Organization:Patient, Profession]
+      base_revision: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
+      max_length: 512
+      overlap: 64
+      entity_labels:
+        [
+          Address_Location:Caregiver,
+          Address_Location:Other,
+          Address_Location:Patient,
+          Age_Birthdate,
+          Contactdetails,
+          Date,
+          ID:Caregiver,
+          ID:Patient,
+          Name:Caregiver,
+          Name:Other,
+          Name:Patient,
+          Organization:Healthcare,
+          Organization:Other,
+          Profession,
+        ]
   - id: synthetic
     runner: robbert
     params:
-      checkpoint: /Users/stighellemans/Desktop/DEID/open-deid/models/deid-robbert-synthetic-all-cleaned-training-ready-holdout300-6393-fulltrain-refit-mps-newdates/best.pt
+      checkpoint: models/synthetic/best.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
-      # 14-label head: Stage-2 fulltrain-refit, retrofitted 15->14 (retired Organization:Patient
-      # row dropped). The runner checks label COUNT, so this must be 14.
-      # NOTE: the uza runner above stays 15 — that model will be replaced, not trimmed.
-      entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
-                      Age_Birthdate, Contactdetails, Date, ID:Caregiver, ID:Patient, Name:Caregiver,
-                      Name:Other, Name:Patient, Organization:Healthcare, Organization:Other,
-                      Profession]
+      base_revision: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
+      max_length: 512
+      overlap: 64
+      # 14-label head (Stage-2 fulltrain-refit). Same label set as the uza model above.
+      entity_labels:
+        [
+          Address_Location:Caregiver,
+          Address_Location:Other,
+          Address_Location:Patient,
+          Age_Birthdate,
+          Contactdetails,
+          Date,
+          ID:Caregiver,
+          ID:Patient,
+          Name:Caregiver,
+          Name:Other,
+          Name:Patient,
+          Organization:Healthcare,
+          Organization:Other,
+          Profession,
+        ]
 
   # LLM (Qwen) — needs a running OpenAI-compatible endpoint. None is up by default
   # on this Mac; start one, e.g.:
   #   ollama pull qwen3:8b && ollama serve            # -> base_url http://127.0.0.1:11434/v1, model qwen3:8b
   #   llama-server -m Qwen3-8B-Q4_K_M.gguf --jinja -c 16384 --port 8089   # -> :8089/v1
-  # then uncomment. Thinking ON is essential (~14x lower FP than no-think).
+  # then uncomment. Thinking ON substantially lowers non-PII redaction (~14x versus no-think).
   # - id: qwen3-8b
   #   runner: llm
   #   device_label: gpu         # remote GPU endpoint -> colour its time-vs-recall dot GPU
@@ -88,11 +127,11 @@ postprocess:
   enabled: true
   use_metadata: true
   rules: true
-  inception: false            # INCEpTION-token normalization needs a JVM
+  inception: false # INCEpTION-token normalization needs a JVM
 
 evaluate:
   enabled: true
-  bundle: evaluation_bundle    # symlink -> ../deid-evaluation/evaluation_bundle (300-doc gold)
+  bundle: evaluation_bundle # symlink -> ../deid-evaluation/evaluation_bundle (v2.2, 300-doc gold)
   ignore_categories: [formatting, additional_info, medical_info, time, title]
-  plot: recall_fp_burden.png
-  plot_time_vs_recall: time_vs_recall.png   # run time vs recall (with metadata), dots coloured by device
+  plot: core_pii_recall_non_pii_redaction.png
+  plot_time_vs_recall: time_vs_recall.png # run time vs recall (with metadata), dots coloured by device

@@ -1,0 +1,44 @@
+# Qwen-only synthetic benchmark, matched to the primary-care execution method.
+#
+# The primary-care run used Ollama on the operator's Apple-silicon Mac via a
+# reverse SSH tunnel.  This run calls the same local endpoint directly while
+# keeping the model, prompt, generation, extraction, post-processing, and
+# evaluation settings identical.
+input: input.jsonl
+output_dir: out_qwen_synthetic
+device: mps
+timings: timings.qwen.synthetic.yaml
+
+metadata:
+  source: from_input
+
+conditions:
+  - { id: nometa, name: "no metadata", metadata: { source: none } }
+  - { id: meta, name: "with metadata" }
+
+models:
+  - id: qwen3-8b
+    runner: llm
+    device_label: gpu
+    params:
+      base_url: http://127.0.0.1:11434/v1
+      model: qwen3:8b
+      prompt_dir: prompts
+      temperature: 0.6
+      top_p: 0.95
+      thinking: true
+      max_tokens: 8000
+      workers: 2
+
+postprocess:
+  enabled: true
+  use_metadata: true
+  rules: true
+  inception: false
+
+evaluate:
+  enabled: true
+  bundle: evaluation_bundle
+  ignore_categories: [formatting, additional_info, medical_info, time, title]
+  plot: core_pii_recall_non_pii_redaction.png
+  plot_time_vs_recall: time_vs_recall.png

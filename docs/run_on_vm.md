@@ -2,8 +2,12 @@
 
 Walkthrough for `deid-review-vm` (Google Cloud). The documents never leave the
 VM; everything — including the LLM — runs locally on the VM's CPU. Only the
-aggregate outputs (`summary.csv`, `recall_fp_burden.png`) contain no patient
+aggregate outputs (`summary.csv`, `core_pii_recall_non_pii_redaction.png`) contain no patient
 text and may be copied off.
+
+For a hospital upgrade, follow [hospital_rerun.md](hospital_rerun.md) instead;
+it preserves the old deployment, uses the committed source/model locks, and
+adds a production preflight.
 
 ## 0. Start + SSH (from your laptop)
 
@@ -24,18 +28,23 @@ unzip deid-export.zip          # -> results.jsonl  (id, raw_text, spans, ...)
 ## 2. Code + environments
 
 ```bash
-git clone <your deid-battery repo> && cd deid-battery
+git clone https://github.com/stighellemans/deid-schema.git deid-schema
+git -C deid-schema checkout cfa99eb04e7884a13e05df27f942fa03855f4209
+git clone https://github.com/stighellemans/deid-battery.git deid-battery && cd deid-battery
 
 # one command builds .venv (main) + .venv-pf (privacy filters). uv fetches its
 # own Python, so the python3-venv/build-essential from step 1 are optional.
-bash scripts/setup.sh --pf
+bash scripts/setup.sh --pf --deid-schema ../deid-schema \
+  --belgian-deduce "git+https://github.com/stighellemans/belgian-deduce.git@aeed6f27aef40bcdf4d6ddfa000cbfeb17bd6224"
 
-# belgian-deduce isn't on PyPI -- add it to the main env from its repo:
-.venv/bin/pip install /path/to/belgian-deduce
+# Confirm the checkout and all remote model revisions are locked before adding data:
+.venv/bin/python scripts/preflight_hospital.py --config configs/battery.vm.yaml \
+  --code-only
 ```
 
-CPU note: `pip install torch` pulls the CPU build automatically on a VM without
-CUDA. On a GPU VM, install the CUDA torch wheel instead and set `device: cuda`.
+The committed VM lock installs CPU-only PyTorch on Linux. A GPU deployment needs
+separately generated and reviewed GPU lock files plus `device: cuda`; do not
+replace Torch ad hoc inside the frozen environment.
 
 ## 3. Input + gold bundle
 
@@ -70,7 +79,7 @@ row. The non-LLM runners are fast on CPU.
 
 Copy `configs/battery.example.yaml` to `configs/battery.yaml` and set:
 `input: input.jsonl`, `device: cpu`, your RobBERT `checkpoint:`/`train_metrics:`,
-the privacy-filter `venv: ../.venv-pf`, the llm `base_url:`, `metadata.source`,
+the privacy-filter `venv: .venv-pf`, the llm `base_url:`, `metadata.source`,
 and `evaluate.bundle: evaluation_bundle`.
 
 ```bash
@@ -78,7 +87,7 @@ and `evaluate.bundle: evaluation_bundle`.
 ```
 
 This runs every model → shared post-processing (with metadata) → evaluation →
-`out/recall_fp_burden.png` + `out/summary.csv`. Watch the log; each model prints
+`out/core_pii_recall_non_pii_redaction.png` + `out/summary.csv`. Watch the log; each model prints
 its span count.
 
 **Interrupted? Just re-run with `--skip-existing`.** CPU inference is slow, so a

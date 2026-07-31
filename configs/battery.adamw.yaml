@@ -1,0 +1,50 @@
+# Full 300-document comparison for the synthetic AdamW candidate only.
+input: input.jsonl
+output_dir: out-adamw
+device: cpu
+
+metadata:
+  source: from_input
+
+conditions:
+  - { id: nometa, name: "no metadata", metadata: { source: none } }
+  - { id: meta, name: "with metadata" }
+
+models:
+  - id: synthetic-adamw
+    runner: robbert
+    params:
+      checkpoint: models/synthetic-adamw/best.pt
+      base_model: DTAI-KULeuven/robbert-2023-dutch-base
+      base_revision: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
+      max_length: 512
+      overlap: 64
+      entity_labels:
+        [
+          Address_Location:Caregiver,
+          Address_Location:Other,
+          Address_Location:Patient,
+          Age_Birthdate,
+          Contactdetails,
+          Date,
+          ID:Caregiver,
+          ID:Patient,
+          Name:Caregiver,
+          Name:Other,
+          Name:Patient,
+          Organization:Healthcare,
+          Organization:Other,
+          Profession,
+        ]
+
+postprocess:
+  enabled: true
+  use_metadata: true
+  rules: true
+  inception: false
+
+evaluate:
+  enabled: true
+  bundle: evaluation_bundle
+  ignore_categories: [formatting, additional_info, medical_info, time, title]
+  plot: core_pii_recall_non_pii_redaction.png

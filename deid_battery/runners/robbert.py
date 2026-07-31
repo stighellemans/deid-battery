@@ -174,7 +174,12 @@ def run(docs, params):
                          f"{num_ent}; set params.entity_labels or params.train_metrics")
 
     base = params.get("base_model", "DTAI-KULeuven/robbert-2023-dutch-base")
-    tok = AutoTokenizer.from_pretrained(base, use_fast=True, add_prefix_space=True)
+    base_kwargs = {}
+    if params.get("base_revision"):
+        base_kwargs["revision"] = params["base_revision"]
+    tok = AutoTokenizer.from_pretrained(
+        base, use_fast=True, add_prefix_space=True, **base_kwargs
+    )
     # stable character offsets for byte-level BPE (otherwise spans are off by one)
     try:
         from tokenizers.pre_tokenizers import ByteLevel
@@ -187,8 +192,10 @@ def run(docs, params):
     class Model(torch.nn.Module):
         def __init__(self):
             super().__init__()
-            cfg = AutoConfig.from_pretrained(base)
-            self.encoder = AutoModel.from_pretrained(base, config=cfg)
+            cfg = AutoConfig.from_pretrained(base, **base_kwargs)
+            self.encoder = AutoModel.from_pretrained(
+                base, config=cfg, **base_kwargs
+            )
             h = int(cfg.hidden_size)
             self.dropout = torch.nn.Dropout(float(getattr(cfg, "hidden_dropout_prob", 0.1)))
             self.bio_classifier = torch.nn.Linear(h, num_bio)

@@ -64,24 +64,28 @@ models:
 
   - id: gliner-pii
     runner: gliner
-    params: {model: urchade/gliner_multi_pii-v1, threshold: 0.5}
+    params:
+      model: urchade/gliner_multi_pii-v1
+      revision: 1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d
+      threshold: 0.5
 
   - id: my-robbert                       # bring-your-own dual-head checkpoint
     runner: robbert
     params:
       checkpoint: /path/to/model.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
+      base_revision: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
       train_metrics: /path/to/train_metrics.json   # for the label order (or set entity_labels:)
 
   - id: openai-privacy-filter
     runner: hf_token
-    venv: ../.venv-pf                    # OpenAIPrivacyFilter arch needs transformers>=5.7
-    params: {model: openai/privacy-filter}
+    venv: .venv-pf                       # OpenAIPrivacyFilter arch needs transformers>=5.7
+    params: {model: openai/privacy-filter, revision: 7ffa9a043d54d1be65afb281eddf0ffbe629385b}
 
   - id: openmed-multilingual
     runner: hf_token
-    venv: ../.venv-pf
-    params: {model: OpenMed/privacy-filter-multilingual}
+    venv: .venv-pf
+    params: {model: OpenMed/privacy-filter-multilingual, revision: f914f18d909d541d288dfda44a4d0b6bdb638d57}
 
   - id: qwen
     runner: llm
@@ -89,7 +93,7 @@ models:
       base_url: http://127.0.0.1:8089/v1  # OpenAI-compatible: vLLM (GPU) or llama.cpp (CPU)
       model: qwen3-8b
       prompt_dir: prompts                 # dict_prompt.txt, dict_example.txt, labels.csv
-      thinking: true                      # essential for Qwen DEID quality (~14x lower FP than no-think)
+      thinking: true                      # improves Qwen DEID quality (~14x lower non-PII redaction than no-think)
       # reasoning: {effort: medium}       # for OpenRouter-style endpoints
 
 # ---------------------------------------------------------------------------
@@ -106,10 +110,10 @@ postprocess:
   inception: false            # INCEpTION-token normalization (needs a JVM)
 
 # ---------------------------------------------------------------------------
-# EVALUATION: char-level essential-recall + FP-burden against a gold bundle.
+# EVALUATION: character-level core PII recall + non-PII redaction rate against a gold bundle.
 # ---------------------------------------------------------------------------
 evaluate:
   enabled: true
   bundle: evaluation_bundle   # deid-eval-annotator gold bundle (reference_items.jsonl)
   ignore_categories: [formatting, additional_info, medical_info, time, title]
-  plot: recall_fp_burden.png
+  plot: core_pii_recall_non_pii_redaction.png

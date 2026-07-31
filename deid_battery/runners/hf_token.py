@@ -129,9 +129,15 @@ def run(docs, params):
     from transformers import AutoModelForTokenClassification, AutoTokenizer
 
     model_id = params["model"]
-    tok = AutoTokenizer.from_pretrained(model_id)
+    load_kwargs = {}
+    if params.get("revision"):
+        load_kwargs["revision"] = params["revision"]
+    tok = AutoTokenizer.from_pretrained(model_id, **load_kwargs)
     model = AutoModelForTokenClassification.from_pretrained(
-        model_id, trust_remote_code=params.get("trust_remote_code", True)).eval()
+        model_id,
+        trust_remote_code=params.get("trust_remote_code", True),
+        **load_kwargs,
+    ).eval()
     device = _device(params.get("device"))
     model.to(device)
     label_map = {k.lower(): v for k, v in (params.get("label_map") or DEFAULT_LABEL_MAP).items()}

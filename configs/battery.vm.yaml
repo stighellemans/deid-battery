@@ -6,7 +6,8 @@
 # One-time setup on the VM (from the repo root):
 #   # 1) environments (main + privacy-filters + deidentify) and belgian-deduce from git:
 #   bash scripts/setup.sh --all \
-#       --belgian-deduce "git+https://github.com/stighellemans/belgian-deduce.git"
+#       --deid-schema ../deid-schema \
+#       --belgian-deduce "git+https://github.com/stighellemans/belgian-deduce.git@aeed6f27aef40bcdf4d6ddfa000cbfeb17bd6224"
 #   # 2) checkpoints: drop the two .pt files here (copied out-of-band; not in git):
 #   #      models/uza/model.pt          (uza)
 #   #      models/synthetic/best.pt     (synthetic)
@@ -25,7 +26,7 @@
 #   An incomplete model is excluded from eval with a warning until it's finished. Don't run two
 #   processes against the same out/ at once.
 #
-# Outputs land in out/ : per-model by_doc spans, summary.csv, recall_fp_burden.png.
+# Outputs land in out/ : per-model by_doc spans, summary.csv, core_pii_recall_non_pii_redaction.png.
 # Only summary.csv + the plot are score-only (no patient text) -> safe to copy off.
 input: input.jsonl
 output_dir: out
@@ -52,29 +53,38 @@ models:
     params: {engine: deduce}
   - id: gliner-pii
     runner: gliner
-    params: {model: urchade/gliner_multi_pii-v1, threshold: 0.5}
+    params:
+      model: urchade/gliner_multi_pii-v1
+      revision: 1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d
+      threshold: 0.5
   - id: openai-privacy-filter
     runner: hf_token
     venv: .venv-pf              # built by: scripts/setup.sh --pf
-    params: {model: openai/privacy-filter}
+    params: {model: openai/privacy-filter, revision: 7ffa9a043d54d1be65afb281eddf0ffbe629385b}
   - id: openmed-multilingual
     runner: hf_token
     venv: .venv-pf
-    params: {model: OpenMed/privacy-filter-multilingual}
+    params: {model: OpenMed/privacy-filter-multilingual, revision: f914f18d909d541d288dfda44a4d0b6bdb638d57}
   - id: uza
     runner: robbert
     params:
       checkpoint: models/uza/model.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
+      base_revision: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
+      max_length: 512
+      overlap: 64
       entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
                       Age_Birthdate, Contactdetails, Date, ID:Caregiver, ID:Patient, Name:Caregiver,
                       Name:Other, Name:Patient, Organization:Healthcare, Organization:Other,
-                      Organization:Patient, Profession]
+                      Profession]
   - id: synthetic
     runner: robbert
     params:
       checkpoint: models/synthetic/best.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
+      base_revision: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
+      max_length: 512
+      overlap: 64
       # 14-label head: gold checkpoint trimmed 15->14 (retired subtype's slot dropped).
       # uza above stays 15 (that model will be replaced).
       entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
@@ -88,29 +98,21 @@ models:
     # spiked a 15 GB VM past its ceiling); overlap catches boundary entities.
     params: {model: model_bilstmcrf_ons_large-v0.2.0, chunk: 50, max_chars: 20000, overlap: 500}
 
-  # LLM (Qwen) — served by Ollama on the operator's Mac. Empirically verified to reproduce the
-  # validated llama.cpp Q4_K_M run (same span volume; agreement on par with the openrouter-vs-
-  # llamacpp baseline), so it's used here for convenience — no GGUF / llama-server to manage.
-  # Reached over a REVERSE SSH tunnel. One-time on the Mac: `ollama pull qwen3:8b`, then serve:
-  #   OLLAMA_CONTEXT_LENGTH=16384 OLLAMA_KEEP_ALIVE=-1 OLLAMA_NUM_PARALLEL=2 caffeinate -dis ollama serve
-  #   (16384 ctx is REQUIRED — thinking output is long and the default ctx truncates it)
-  # Then keep this tunnel open for the whole run (maps VM 127.0.0.1:11500 -> Mac 127.0.0.1:11434):
-  #   gcloud compute ssh deid-review-vm --zone=europe-north1-b --tunnel-through-iap \
-  #     -- -N -R 11500:localhost:11434 -o ServerAliveInterval=30 -o ServerAliveCountMax=3
-  #
-  # COMPLIANCE: patient text is POSTed to base_url, so it travels VM -> Mac over the (encrypted)
-  # tunnel — i.e. it LEAVES the VM. Acceptable only because the Mac is the operator's own machine
-  # and the transport is private; never point this at a public/hosted API.
+  # LLM (Qwen) — this endpoint MUST run on the same approved hospital host (or an
+  # explicitly approved internal host). Never tunnel patient text to a laptop or
+  # public API. Start a local OpenAI-compatible server as shown in docs/run_on_vm.md.
   - id: qwen3-8b
     runner: llm
-    device_label: gpu           # compute is a REMOTE GPU (Ollama on the Mac); colour its time-vs-recall dot GPU
+    device_label: cpu
     params:
-      base_url: http://127.0.0.1:11500/v1   # reverse SSH tunnel -> Mac's Ollama (:11434)
-      model: qwen3:8b                        # Ollama tag; Q4_K_M by default (= the validated quant)
+      base_url: http://127.0.0.1:8089/v1
+      model: qwen3-8b
+      model_file: models/qwen3-8b.gguf
+      model_sha256_file: models/qwen3-8b.gguf.sha256
       prompt_dir: prompts       # dict_prompt.txt, dict_example.txt, labels.csv
-      thinking: true            # essential: ~14x lower FP (Ollama qwen3 thinks by default)
+      thinking: true
       max_tokens: 8000          # exact parity with the validated run (runner default is 8192)
-      workers: 2                # needs OLLAMA_NUM_PARALLEL>=2 on the Mac to run both concurrently
+      workers: 1                # conservative local default; raise only after the smoke run
 
 postprocess:
   enabled: true
@@ -122,5 +124,5 @@ evaluate:
   enabled: true
   bundle: evaluation_bundle     # the deid-eval-annotator gold bundle placed on the VM
   ignore_categories: [formatting, additional_info, medical_info, time, title]
-  plot: recall_fp_burden.png
+  plot: core_pii_recall_non_pii_redaction.png
   plot_time_vs_recall: time_vs_recall.png   # run time vs recall (with metadata), dots coloured by device

@@ -2,8 +2,8 @@
 
 Run a **battery of de-identification systems** over the same documents, emit one
 **unified span schema**, optionally inject **known metadata** (patient / caregiver
-names) into the rule engines and the post-processor, and evaluate **essential
-recall + false-positive burden** against a gold reference.
+names) into the rule engines and the post-processor, and evaluate **core PII
+recall + non-PII redaction rate** against a gold reference.
 
 Config-driven and path-independent: the same code runs on a CPU VM or a GPU box.
 Designed so sensitive text can be processed **fully offline** (no model calls an
@@ -29,11 +29,11 @@ external API).
 > torch 1.10) with no arm64/py3.12 wheels, so it only builds on an **amd64 Linux**
 > host (CPU is fine — no GPU). Build its venv once and reference it with `venv:`:
 > ```bash
-> bash scripts/setup.sh --deidentify     # builds ./.venv-deidentify (py3.9 + model)
+> bash scripts/setup.sh --deidentify --deid-schema ../deid-schema
 > # into a shared/root-owned dir like /opt instead? create it for your user first,
 > # then run the dedicated script WITHOUT sudo (sudo hides your uv + misplaces the model):
 > #   sudo install -d -o "$USER" -g "$USER" /opt/.venv-deidentify
-> #   bash scripts/setup_deidentify_venv.sh /opt/.venv-deidentify
+> #   bash scripts/setup_deidentify_venv.sh --deid-schema ../deid-schema /opt/.venv-deidentify
 > ```
 > ```yaml
 > - id: deidentify
@@ -50,11 +50,20 @@ One command builds whichever environments you want. It is uv-first: it
 auto-installs [uv](https://astral.sh/uv) and fetches its own Python, so you need
 no `apt` packages and no system `python3.x`.
 
+Setup installs the committed lock files under `requirements/`; a fresh checkout
+therefore gets the validated dependency versions rather than whatever happens
+to be newest on the package index that day. The Linux locks use CPU-only
+PyTorch. See `docs/hospital_rerun.md` before changing them for a GPU host.
+
 ```bash
-bash scripts/setup.sh          # main env .venv: core + robbert + deduce + gliner + llm
-bash scripts/setup.sh --pf     # + privacy-filters env (.venv-pf, transformers>=5.7)
-bash scripts/setup.sh --all    # + deidentify env (.venv-deidentify, amd64 Linux only)
+bash scripts/setup.sh --deid-schema ../deid-schema       # main env
+bash scripts/setup.sh --pf --deid-schema ../deid-schema  # + privacy filters
+bash scripts/setup.sh --all --deid-schema ../deid-schema # + Deidentify (amd64 Linux)
 ```
+
+`--deid-schema` must point to a local checkout. It defaults to the sibling
+`../deid-schema` directory and setup fails before model installation when that
+checkout is unavailable or its worker imports do not validate.
 
 Then:
 
@@ -66,10 +75,13 @@ cp configs/battery.example.yaml configs/battery.yaml    # edit models/paths
 <details><summary>Manual install (no setup script / no uv)</summary>
 
 ```bash
+pip install -e ../deid-schema
 pip install -e . -r requirements/robbert.txt -r requirements/deduce.txt \
                  -r requirements/gliner.txt  -r requirements/llm.txt
 # privacy filters need a SEPARATE env (transformers>=5.7 conflicts with gliner):
-python -m venv .venv-pf && .venv-pf/bin/pip install -e . -r requirements/privacy-filters.txt
+python -m venv .venv-pf
+.venv-pf/bin/pip install -e ../deid-schema
+.venv-pf/bin/pip install -e . -r requirements/privacy-filters.txt
 ```
 </details>
 
@@ -87,7 +99,7 @@ python -m deid_battery.orchestrate run --config configs/battery.yaml
 ```
 
 Outputs in `output_dir/`: `<model>/by_doc.jsonl` (unified spans per model),
-`summary.csv`, `quantity_payload.json`, and `recall_fp_burden.png`.
+`summary.csv`, `quantity_payload.json`, and `core_pii_recall_non_pii_redaction.png`.
 
 ## Resuming an interrupted run
 
@@ -155,12 +167,23 @@ recovers caregiver names for it.
 
 ## Evaluation
 
-Char-level essential recall (with ignorable categories) and a false-positive
-burden split into machine-only vs overflow FP, scored against a
+Character-level core PII recall (with excluded categories) and a non-PII
+redaction rate split into machine-only and boundary-overflow redactions, scored against a
 `deid-eval-annotator` gold bundle (`reference_items.jsonl`). The evaluator and
 plot are vendored under `deid_battery/_vendor/` so the package is self-contained.
+
+The vendored post-processor also carries date and birthdate pseudonymization
+(shifted dates, `Age_Birthdate` age text), but the battery never passes
+`date_shift_days`, so that path stays inactive here and spans keep their generic
+placeholders. See `post-process/README.md` for the age-rendering bands if you
+enable it.
 
 ## Running on a CPU VM
 
 See [docs/run_on_vm.md](docs/run_on_vm.md) for a full walkthrough on a Google
 Cloud review VM (data stays on the VM; LLM via a local llama.cpp server).
+
+For a hospital rerun or upgrade, use
+[docs/hospital_rerun.md](docs/hospital_rerun.md). It uses a parallel checkout,
+locked Git/model revisions, frozen Python dependencies, an offline-only LLM,
+and a fail-fast preflight.

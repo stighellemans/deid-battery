@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "created": "2026-07-31",
+  "git_sources": {
+    "deid-schema": {
+      "url": "https://github.com/stighellemans/deid-schema.git",
+      "path": "../deid-schema",
+      "commit": "cfa99eb04e7884a13e05df27f942fa03855f4209",
+      "required_checkout": true
+    },
+    "belgian-deduce": {
+      "url": "https://github.com/stighellemans/belgian-deduce.git",
+      "commit": "aeed6f27aef40bcdf4d6ddfa000cbfeb17bd6224",
+      "required_checkout": false
+    },
+    "span-annotations": {
+      "url": "https://github.com/stighellemans/span-annotations.git",
+      "commit": "a873943305ad36d94bc11372774646a9f658e044",
+      "required_checkout": false
+    },
+    "post-process": {
+      "url": "https://github.com/stighellemans/post-process.git",
+      "commit": "e23ed66d85865f8877a9accea60603710ea140ae",
+      "required_checkout": false
+    },
+    "deid-eval-annotator": {
+      "url": "https://github.com/stighellemans/deid-eval-annotator.git",
+      "commit": "97256d645935a6342205bb698e58712060198e5a",
+      "required_checkout": false
+    },
+    "deid-evaluation": {
+      "url": "https://github.com/stighellemans/deid-evaluation.git",
+      "commit": "4e1cccaab575a405e5b02e260f22f16ae553992a",
+      "required_checkout": false
+    }
+  },
+  "huggingface_models": {
+    "urchade/gliner_multi_pii-v1": "1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d",
+    "openai/privacy-filter": "7ffa9a043d54d1be65afb281eddf0ffbe629385b",
+    "OpenMed/privacy-filter-multilingual": "f914f18d909d541d288dfda44a4d0b6bdb638d57",
+    "DTAI-KULeuven/robbert-2023-dutch-base": "1164b2df6d3ceb1735900c839da8de9bad1a99f9"
+  }
+}

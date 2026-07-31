@@ -4,8 +4,11 @@ input.jsonl
 input.smoke.jsonl
 out/
 out_smoke/
+out-*/
+out_*/
 evaluation_bundle
 evaluation_bundle*/
+configs/*.local.yaml
 
 # --- Model weights (too big for GitHub; transfer out-of-band) ---
 *.pt
@@ -22,4 +25,6 @@ __pycache__/
 
 # --- Logs / OS ---
 *.log
+run_logs/
+timings*.yaml
 .DS_Store

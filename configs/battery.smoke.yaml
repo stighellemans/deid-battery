@@ -22,31 +22,39 @@ models:
     params: {engine: deduce}
   - id: gliner-pii
     runner: gliner
-    params: {model: urchade/gliner_multi_pii-v1, threshold: 0.5}
+    params:
+      model: urchade/gliner_multi_pii-v1
+      revision: 1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d
+      threshold: 0.5
   - id: openai-privacy-filter
     runner: hf_token
-    venv: /Users/stighellemans/Desktop/DEID/gold-testset-validation/model_spans/.venv-pf
-    params: {model: openai/privacy-filter}
+    venv: .venv-pf
+    params: {model: openai/privacy-filter, revision: 7ffa9a043d54d1be65afb281eddf0ffbe629385b}
   - id: openmed-multilingual
     runner: hf_token
-    venv: /Users/stighellemans/Desktop/DEID/gold-testset-validation/model_spans/.venv-pf
-    params: {model: OpenMed/privacy-filter-multilingual}
+    venv: .venv-pf
+    params: {model: OpenMed/privacy-filter-multilingual, revision: f914f18d909d541d288dfda44a4d0b6bdb638d57}
   - id: uza
     runner: robbert
     params:
-      checkpoint: /Users/stighellemans/Desktop/DEID/azure-vm-server-lean/model/model.pt
+      checkpoint: models/uza/model.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
+      base_revision: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
+      max_length: 512
+      overlap: 64
       entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
                       Age_Birthdate, Contactdetails, Date, ID:Caregiver, ID:Patient, Name:Caregiver,
                       Name:Other, Name:Patient, Organization:Healthcare, Organization:Other,
-                      Organization:Patient, Profession]
+                      Profession]
   - id: synthetic
     runner: robbert
     params:
-      checkpoint: /Users/stighellemans/Desktop/DEID/open-deid/models/deid-robbert-synthetic-all-cleaned-training-ready-holdout300-6393-fulltrain-refit-mps-newdates/best.pt
+      checkpoint: models/synthetic/best.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
-      # 14-label head: Stage-2 fulltrain-refit, retrofitted 15->14 (retired Organization:Patient row dropped).
-      # uza above stays 15 (that model will be replaced).
+      base_revision: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
+      max_length: 512
+      overlap: 64
+      # 14-label head (Stage-2 fulltrain-refit). Same label set as the uza model above.
       entity_labels: [Address_Location:Caregiver, Address_Location:Other, Address_Location:Patient,
                       Age_Birthdate, Contactdetails, Date, ID:Caregiver, ID:Patient, Name:Caregiver,
                       Name:Other, Name:Patient, Organization:Healthcare, Organization:Other,
@@ -62,4 +70,4 @@ evaluate:
   enabled: true
   bundle: evaluation_bundle.smoke
   ignore_categories: [formatting, additional_info, medical_info, time, title]
-  plot: recall_fp_burden.png
+  plot: core_pii_recall_non_pii_redaction.png

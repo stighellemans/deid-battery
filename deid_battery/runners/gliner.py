@@ -70,7 +70,12 @@ def run(docs, params):
         return ordered(docs, by_doc)
     from gliner import GLiNER
 
-    model = GLiNER.from_pretrained(params.get("model", "urchade/gliner_multi_pii-v1"))
+    load_kwargs = {}
+    if params.get("revision"):
+        load_kwargs["revision"] = params["revision"]
+    model = GLiNER.from_pretrained(
+        params.get("model", "urchade/gliner_multi_pii-v1"), **load_kwargs
+    )
     model.eval()
     # GLiNER.predict_entities runs on the model's device, so moving the model is
     # enough (it tokenises + places tensors internally). Default None auto-detects.
@@ -86,21 +91,58 @@ def run(docs, params):
     max_tokens = int(params.get("max_tokens") or max(64, model_max - 100))
     overlap_tokens = int(params.get("overlap_tokens", 50))
 
-    for d in track(todo, params):
-        text = d["text"]
-        best: dict[tuple, dict] = {}
-        for offset, chunk in _windows(text, max_tokens, overlap_tokens):
-            for ent in model.predict_entities(chunk, labels, threshold=threshold):
-                label = label_map.get(str(ent.get("label", "")).lower())
-                if not label:
-                    continue
-                b, e = offset + int(ent["start"]), offset + int(ent["end"])
-                if e <= b:
-                    continue
-                key, score = (b, e, label), float(ent.get("score", 0.0))
-                if key not in best or score > best[key]["score"]:
-                    best[key] = make_span(b, e, label, text[b:e], score=score)
-        spans = sorted(best.values(), key=lambda s: (s["begin"], s["end"]))
-        by_doc[d["doc_id"]] = spans
-        ckpt.record(d["doc_id"], spans)
+    batch_size = int(params.get("batch_size", 1) or 1)
+
+    def _accumulate(best, text, offset, ents):
+        for ent in ents:
+            label = label_map.get(str(ent.get("label", "")).lower())
+            if not label:
+                continue
+            b, e = offset + int(ent["start"]), offset + int(ent["end"])
+            if e <= b:
+                continue
+            key, score = (b, e, label), float(ent.get("score", 0.0))
+            if key not in best or score > best[key]["score"]:
+                best[key] = make_span(b, e, label, text[b:e], score=score)
+
+    def _finalize(best):
+        return sorted(best.values(), key=lambda s: (s["begin"], s["end"]))
+
+    if batch_size <= 1:
+        # Default path: one window per predict call. Unchanged from pre-batching.
+        for d in track(todo, params):
+            text = d["text"]
+            best: dict[tuple, dict] = {}
+            for offset, chunk in _windows(text, max_tokens, overlap_tokens):
+                _accumulate(best, text, offset,
+                            model.predict_entities(chunk, labels, threshold=threshold))
+            spans = _finalize(best)
+            by_doc[d["doc_id"]] = spans
+            ckpt.record(d["doc_id"], spans)
+        return ordered(docs, by_doc)
+
+    # Batched path (batch_size>1): pool windows ACROSS docs into GLiNER's own
+    # batch_predict_entities (it pads+masks internally), so a fair GPU timing isn't
+    # throttled by short single-window docs. Same model call -> same entities; only
+    # the batch shape changes. Docs buffered `batch_docs` at a time, checkpointed as done.
+    batch_docs = max(batch_size, int(params.get("batch_docs", 64)))
+
+    def _results():
+        for gi in range(0, len(todo), batch_docs):
+            group = todo[gi:gi + batch_docs]
+            texts = {d["doc_id"]: d["text"] for d in group}
+            best_by = {d["doc_id"]: {} for d in group}
+            work = [(d["doc_id"], off, chunk) for d in group
+                    for off, chunk in _windows(d["text"], max_tokens, overlap_tokens)]
+            for bi in range(0, len(work), batch_size):
+                w = work[bi:bi + batch_size]
+                preds = model.batch_predict_entities([c for _, _, c in w], labels, threshold=threshold)
+                for (doc_id, off, _), ents in zip(w, preds):
+                    _accumulate(best_by[doc_id], texts[doc_id], off, ents)
+            for d in group:
+                yield d["doc_id"], _finalize(best_by[d["doc_id"]])
+
+    for doc_id, spans in track(_results(), params, total=len(todo)):
+        by_doc[doc_id] = spans
+        ckpt.record(doc_id, spans)
     return ordered(docs, by_doc)

@@ -1,0 +1,40 @@
+# Aggregate the completed robustness-v2.2 CPU and Azure-T4 tranches. Use with
+# --no-run; UZA, synthetic, and Qwen are intentionally absent for now.
+input: input.jsonl
+output_dir: out-v2.2
+device: cpu
+timings: timings.v2.2.yaml
+
+metadata:
+  source: from_input
+
+conditions:
+  - {id: nometa, name: "no metadata", metadata: {source: none}}
+  - {id: meta, name: "with metadata"}
+
+models:
+  - {id: belgian-deduce, runner: deduce, params: {engine: belgian-deduce}}
+  - {id: deduce, runner: deduce, params: {engine: deduce}}
+  - {id: gliner-pii, runner: gliner, params: {model: urchade/gliner_multi_pii-v1, revision: 1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d, threshold: 0.5}}
+  - id: openai-privacy-filter
+    runner: hf_token
+    params: {model: openai/privacy-filter, revision: 7ffa9a043d54d1be65afb281eddf0ffbe629385b}
+  - id: openmed-multilingual
+    runner: hf_token
+    params: {model: OpenMed/privacy-filter-multilingual, revision: f914f18d909d541d288dfda44a4d0b6bdb638d57}
+  - id: deidentify
+    runner: deidentify
+    params: {model: model_bilstmcrf_ons_large-v0.2.0}
+
+postprocess:
+  enabled: true
+  use_metadata: true
+  rules: true
+  inception: false
+
+evaluate:
+  enabled: true
+  bundle: evaluation_bundle
+  ignore_categories: [formatting, additional_info, medical_info, time, title]
+  plot: core_pii_recall_non_pii_redaction.png
+  plot_time_vs_recall: time_vs_recall.png
