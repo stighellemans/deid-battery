@@ -1,18 +1,23 @@
-# VM config: run the FULL battery on a CPU (amd64 Linux) box. All 9 systems, both
-# metadata conditions, post-process + eval + plot. Data stays on the VM.
+# Hospital VM config: run the FULL battery on the established amd64 Linux host.
+# The non-LLM systems run on CPU; Qwen uses the host's loopback-only GPU service.
+# All 9 systems, both metadata conditions, post-process + eval + plot. Data stays
+# on the approved hospital infrastructure.
 #
-# All paths are RELATIVE TO THE REPO ROOT -- run every command from the repo root.
+# Data/model paths are relative to the repo root; Deidentify deliberately uses
+# its established absolute venv path. Run every command from the repo root.
 #
 # One-time setup on the VM (from the repo root):
-#   # 1) environments (main + privacy-filters + deidentify) and belgian-deduce from git:
-#   bash scripts/setup.sh --all \
+#   # 1) main + privacy-filter environments and belgian-deduce from git:
+#   bash scripts/setup.sh --pf \
 #       --deid-schema ../deid-schema \
 #       --belgian-deduce "git+https://github.com/stighellemans/belgian-deduce.git@aeed6f27aef40bcdf4d6ddfa000cbfeb17bd6224"
-#   # 2) checkpoints: drop the two .pt files here (copied out-of-band; not in git):
+#   # 2) dedicated legacy deidentify environment at the established hospital path:
+#   bash scripts/setup_deidentify_venv.sh --deid-schema ../deid-schema /opt/.venv-deidentify
+#   # 3) checkpoints: drop the two .pt files here (copied out-of-band; not in git):
 #   #      models/uza/model.pt          (uza)
 #   #      models/synthetic/best.pt     (synthetic)
 #   mkdir -p models/uza models/synthetic
-#   # 3) gold: put the gold files on the VM, then build the input (oracle metadata baked in):
+#   # 4) gold: put the gold files on the VM, then build the input (oracle metadata baked in):
 #   #      - the corrected gold annotations.jsonl  -> builds input.jsonl
 #   #      - the deid-eval-annotator bundle        -> ./evaluation_bundle/ (reference_items.jsonl + manifest.json)
 #   .venv/bin/python scripts/build_input_from_gold.py --gold /path/to/annotations.jsonl --out input.jsonl
@@ -93,26 +98,26 @@ models:
                       Profession]
   - id: deidentify
     runner: deidentify
-    venv: .venv-deidentify      # built by: scripts/setup.sh --deidentify (amd64 Linux, CPU)
+    venv: /opt/.venv-deidentify # dedicated py3.9 amd64 environment (legacy 2020 stack)
     # max_chars windows long docs so one huge doc can't OOM the box (a 94 KB doc
     # spiked a 15 GB VM past its ceiling); overlap catches boundary entities.
     params: {model: model_bilstmcrf_ons_large-v0.2.0, chunk: 50, max_chars: 20000, overlap: 500}
 
-  # LLM (Qwen) — this endpoint MUST run on the same approved hospital host (or an
-  # explicitly approved internal host). Never tunnel patient text to a laptop or
-  # public API. Start a local OpenAI-compatible server as shown in docs/run_on_vm.md.
+  # Qwen — established OpenAI-compatible GPU service on the hospital host. Keep
+  # the endpoint loopback-only; never tunnel patient text to a laptop/public API.
+  # Generation settings match configs/battery.qwen.synthetic.yaml explicitly.
   - id: qwen3-8b
     runner: llm
-    device_label: cpu
+    device_label: gpu
     params:
-      base_url: http://127.0.0.1:8089/v1
-      model: qwen3-8b
-      model_file: models/qwen3-8b.gguf
-      model_sha256_file: models/qwen3-8b.gguf.sha256
+      base_url: http://127.0.0.1:11500/v1
+      model: qwen3:8b-q4_K_M
       prompt_dir: prompts       # dict_prompt.txt, dict_example.txt, labels.csv
-      thinking: true
-      max_tokens: 8000          # exact parity with the validated run (runner default is 8192)
-      workers: 1                # conservative local default; raise only after the smoke run
+      temperature: 0.6
+      top_p: 0.95
+      thinking: true            # essential: much lower non-PII redaction than no-think
+      max_tokens: 8000
+      workers: 2
 
 postprocess:
   enabled: true

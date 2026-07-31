@@ -38,9 +38,13 @@ checkout, both checkpoints, and every Hugging Face model revision.
 
 ```bash
 cd deid-battery
-bash scripts/setup.sh --all \
+bash scripts/setup.sh --pf \
   --deid-schema ../deid-schema \
   --belgian-deduce "git+https://github.com/stighellemans/belgian-deduce.git@aeed6f27aef40bcdf4d6ddfa000cbfeb17bd6224"
+
+bash scripts/setup_deidentify_venv.sh \
+  --deid-schema ../deid-schema \
+  /opt/.venv-deidentify
 ```
 
 The setup uses `requirements/main.lock.txt`,
@@ -62,8 +66,7 @@ deid-battery/
 │   └── reference_items.jsonl
 └── models/
     ├── uza/model.pt
-    ├── synthetic/best.pt
-    └── qwen3-8b.gguf
+    └── synthetic/best.pt
 ```
 
 Copy only these approved assets from their authoritative location. Do not copy
@@ -77,16 +80,13 @@ sha256sum -c deployment/hospital-models.sha256
 The expected synthetic artifact is the selected 14-label v2.2 checkpoint
 produced as `open-deid/models/selection/best.pt` (SHA-256
 `2f3601625462fccdad833707f7e10787fad6f180eeee93b3cb2ec22bdee97bee`).
-Record the GGUF identity separately before the run:
-
-```bash
-sha256sum models/qwen3-8b.gguf > models/qwen3-8b.gguf.sha256
-```
-
-Start an OpenAI-compatible Qwen server on the same approved host, listening on
-`127.0.0.1:8089`. The committed config deliberately refuses an external LLM
-hostname during preflight. The full preflight also recomputes the GGUF SHA-256
-and compares it with `models/qwen3-8b.gguf.sha256`.
+Use the established OpenAI-compatible Qwen GPU service on the same approved
+hospital host: `http://127.0.0.1:11500/v1`, serving the model name
+`qwen3:8b-q4_K_M`. Confirm that `/v1/models` reports that name before the smoke
+run. The committed config deliberately refuses an external LLM hostname during
+preflight. Its generation settings match the local synthetic benchmark:
+temperature `0.6`, top-p `0.95`, thinking enabled, 8,000 output tokens, and two
+workers.
 
 ## 4. Validate before processing PHI
 
@@ -138,6 +138,6 @@ inside the approved environment. Retain these alongside the run record:
 - `git rev-parse HEAD` for `deid-battery`;
 - `deployment/hospital-source-lock.json`;
 - the three Python lock files;
-- the GGUF SHA-256 file;
+- the Qwen service/model identifier (`qwen3:8b-q4_K_M`);
 - the final config and preflight output;
 - hardware details and `timings.yaml`.
