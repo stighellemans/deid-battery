@@ -37,8 +37,11 @@ git clone https://github.com/stighellemans/deid-battery.git deid-battery && cd d
 bash scripts/setup.sh --pf --deid-schema ../deid-schema \
   --belgian-deduce "git+https://github.com/stighellemans/belgian-deduce.git@aeed6f27aef40bcdf4d6ddfa000cbfeb17bd6224"
 
-# Confirm the checkout and all remote model revisions are locked before adding data:
-.venv/bin/python scripts/preflight_hospital.py --config configs/battery.vm.yaml \
+sudo install -d -o "$USER" -g "$USER" /opt/.venv-deidentify
+bash scripts/setup_deidentify_venv.sh --deid-schema ../deid-schema /opt/.venv-deidentify
+
+# Confirm the checkout and all remote model commits are locked before adding data:
+.venv/bin/python scripts/preflight_hospital.py --config configs/battery.yaml \
   --code-only
 ```
 
@@ -69,21 +72,22 @@ OpenAI-compatible server from `llama-cpp-python`:
 # download a small GGUF into the VM (e.g. a 7-8B Q4_K_M), then:
 .venv/bin/python -m llama_cpp.server --model qwen.gguf --host 127.0.0.1 --port 8089 \
     --n_ctx 8192 --chat_format chatml &
-# point the llm runner's base_url at http://127.0.0.1:8089/v1
+# pass this endpoint with --llm-base-url at run time
 ```
 
 CPU inference is slow — use a small model and/or a document subset for the LLM
 row. The non-LLM runners are fast on CPU.
 
-## 5. Configure + run
+## 5. Run the canonical config
 
-Copy `configs/battery.example.yaml` to `configs/battery.yaml` and set:
-`input: input.jsonl`, `device: cpu`, your RobBERT `checkpoint:`/`train_metrics:`,
-the privacy-filter `venv: .venv-pf`, the llm `base_url:`, `metadata.source`,
-and `evaluate.bundle: evaluation_bundle`.
+There is one configuration, `configs/battery.yaml`. The review VM's CPU Qwen
+endpoint is a runtime difference, so override it without copying the YAML:
 
 ```bash
-.venv/bin/python -m deid_battery.orchestrate run --config configs/battery.yaml
+.venv/bin/python -m deid_battery.orchestrate run --config configs/battery.yaml \
+  --llm-base-url http://127.0.0.1:8089/v1 \
+  --llm-model qwen3-8b \
+  --llm-device-label cpu
 ```
 
 This runs every model → shared post-processing (with metadata) → evaluation →
@@ -95,7 +99,11 @@ run may be stopped (Ctrl-C, an OOM, an overnight disconnect). Inference is
 checkpointed per document, so nothing finished is lost:
 
 ```bash
-.venv/bin/python -m deid_battery.orchestrate run --config configs/battery.yaml --skip-existing
+.venv/bin/python -m deid_battery.orchestrate run --config configs/battery.yaml \
+  --skip-existing \
+  --llm-base-url http://127.0.0.1:8089/v1 \
+  --llm-model qwen3-8b \
+  --llm-device-label cpu
 ```
 
 Finished models are skipped; a model that was mid-flight continues from
@@ -119,8 +127,8 @@ gcloud compute instances stop deid-review-vm --zone=europe-north1-b   # from you
 - **Metadata.** `metadata.source: from_input` uses the explicit `metadata` object
   each doc carries, built by the `deid_battery.inputs` pre-step (step 3). Metadata
   is never derived from the gold annotation spans.
-- **One model at a time.** Comment models in/out of the config; outputs are
-  per-model, so you can add the slow LLM row later without rerunning the rest.
+- **One model at a time.** Use `--only model-id` or `--exclude model-id`; do not
+  make another YAML. Outputs are per-model, so the slow LLM can run later.
 - **Safe to interrupt.** Every runner checkpoints per document; re-run with
   `--skip-existing` to resume an interrupted run (see step 5). Don't run two
   processes against the same `out/` at once — resume is for a *stopped* run.

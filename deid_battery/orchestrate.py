@@ -104,8 +104,58 @@ def _docs_with_meta(docs, metas):
     return [{**d, "_meta": (metas or {}).get(d["doc_id"])} for d in docs]
 
 
-def run(config_path, only=None, skip_existing=False, no_run=False, device=None, batch_size=None):
+def _runtime_config(cfg, *, exclude=None, input_path=None, output_dir=None,
+                    evaluation_bundle=None, timings=None, llm_base_url=None,
+                    llm_model=None, llm_device_label=None, deidentify_venv=None):
+    """Apply machine/run-specific choices without creating another YAML file."""
+    cfg = dict(cfg)
+    if input_path:
+        cfg["input"] = input_path
+    if output_dir:
+        cfg["output_dir"] = output_dir
+    if timings:
+        cfg["timings"] = timings
+    if evaluation_bundle:
+        cfg["evaluate"] = {**(cfg.get("evaluate") or {}), "bundle": evaluation_bundle}
+
+    excluded = set(exclude or ())
+    models = []
+    for original in cfg.get("models", []):
+        if original["id"] in excluded:
+            continue
+        model = dict(original)
+        params = dict(model.get("params") or {})
+        if model.get("runner") == "llm":
+            if llm_base_url:
+                params["base_url"] = llm_base_url
+            if llm_model:
+                params["model"] = llm_model
+            if llm_device_label:
+                model["device_label"] = llm_device_label
+        if model.get("runner") == "deidentify" and deidentify_venv:
+            model["venv"] = deidentify_venv
+        model["params"] = params
+        models.append(model)
+    cfg["models"] = models
+    return cfg
+
+
+def run(config_path, only=None, skip_existing=False, no_run=False, device=None, batch_size=None,
+        exclude=None, input_path=None, output_dir=None, evaluation_bundle=None, timings=None,
+        llm_base_url=None, llm_model=None, llm_device_label=None, deidentify_venv=None):
     cfg = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
+    cfg = _runtime_config(
+        cfg,
+        exclude=exclude,
+        input_path=input_path,
+        output_dir=output_dir,
+        evaluation_bundle=evaluation_bundle,
+        timings=timings,
+        llm_base_url=llm_base_url,
+        llm_model=llm_model,
+        llm_device_label=llm_device_label,
+        deidentify_venv=deidentify_venv,
+    )
     out = Path(cfg.get("output_dir", "out"))
     out.mkdir(parents=True, exist_ok=True)
     # Where per-method run times are recorded (see deid_battery.timing). Kept OUT of
@@ -328,10 +378,34 @@ def main():
     ap.add_argument("--batch-size", type=int, default=None, dest="batch_size",
                     help="windows/docs per forward pass for the neural runners (default 1). "
                          ">1 pools work across docs for a fair GPU timing; verified span-identical.")
+    ap.add_argument("--exclude", default=None,
+                    help="comma-separated model ids to omit entirely (for example deidentify on macOS)")
+    ap.add_argument("--input", dest="input_path", default=None,
+                    help="override input JSONL (useful for a smoke subset)")
+    ap.add_argument("--output-dir", default=None,
+                    help="override output directory")
+    ap.add_argument("--evaluation-bundle", default=None,
+                    help="override evaluate.bundle")
+    ap.add_argument("--timings", default=None,
+                    help="override timings YAML path")
+    ap.add_argument("--llm-base-url", default=None,
+                    help="override the OpenAI-compatible URL for every LLM runner")
+    ap.add_argument("--llm-model", default=None,
+                    help="override the served model name for every LLM runner")
+    ap.add_argument("--llm-device-label", choices=["cpu", "gpu"], default=None,
+                    help="override how LLM timing is labelled (the endpoint owns its compute)")
+    ap.add_argument("--deidentify-venv", default=None,
+                    help="override the dedicated Deidentify environment path")
     a = ap.parse_args()
     only = [s.strip() for s in a.only.split(",") if s.strip()] if a.only else None
+    exclude = [s.strip() for s in a.exclude.split(",") if s.strip()] if a.exclude else None
     run(a.config, only=only, skip_existing=a.skip_existing, no_run=a.no_run,
-        device=a.device, batch_size=a.batch_size)
+        device=a.device, batch_size=a.batch_size, exclude=exclude,
+        input_path=a.input_path, output_dir=a.output_dir,
+        evaluation_bundle=a.evaluation_bundle, timings=a.timings,
+        llm_base_url=a.llm_base_url, llm_model=a.llm_model,
+        llm_device_label=a.llm_device_label,
+        deidentify_venv=a.deidentify_venv)
 
 
 if __name__ == "__main__":

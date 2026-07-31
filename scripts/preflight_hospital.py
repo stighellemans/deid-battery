@@ -156,7 +156,7 @@ def check(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="configs/battery.vm.yaml")
+    parser.add_argument("--config", default="configs/battery.yaml")
     parser.add_argument("--lock", default=str(DEFAULT_LOCK))
     parser.add_argument("--model-lock", default=str(DEFAULT_MODEL_LOCK))
     parser.add_argument("--code-only", action="store_true", help="skip data, model, and venv checks")

@@ -58,7 +58,7 @@ GPU deployment; do not silently replace Torch inside these environments.
 
 ## 3. Place approved assets
 
-Create the local layout expected by `configs/battery.vm.yaml`:
+Create the local layout expected by the canonical `configs/battery.yaml`:
 
 ```text
 deid-battery/
@@ -96,7 +96,7 @@ First validate only code and pins:
 
 ```bash
 .venv/bin/python scripts/preflight_hospital.py \
-  --config configs/battery.vm.yaml --code-only
+  --config configs/battery.yaml --code-only
 ```
 
 After placing all assets and starting the local LLM, run the full file
@@ -104,7 +104,7 @@ preflight:
 
 ```bash
 .venv/bin/python scripts/preflight_hospital.py \
-  --config configs/battery.vm.yaml
+  --config configs/battery.yaml
 ```
 
 Both commands must finish with `hospital preflight OK`. Do not override a dirty
@@ -112,20 +112,30 @@ checkout for a production run.
 
 ## 5. Smoke test, then full run
 
-Build a 12-document input from the same authoritative gold source, or create an
-equivalent approved subset, and use `configs/battery.smoke.yaml`. After that
-passes end to end, start the full run:
+Build a 12-document input and matching evaluation bundle from the same
+authoritative source. Run the same canonical config with path overrides:
 
 ```bash
 .venv/bin/python -m deid_battery.orchestrate run \
-  --config configs/battery.vm.yaml
+  --config configs/battery.yaml \
+  --input input.smoke.jsonl \
+  --output-dir out_smoke \
+  --evaluation-bundle evaluation_bundle.smoke \
+  --timings timings.smoke.yaml
+```
+
+After that passes end to end, start the full run with no overrides:
+
+```bash
+.venv/bin/python -m deid_battery.orchestrate run \
+  --config configs/battery.yaml
 ```
 
 If the process stops, resume the new run with:
 
 ```bash
 .venv/bin/python -m deid_battery.orchestrate run \
-  --config configs/battery.vm.yaml --skip-existing
+  --config configs/battery.yaml --skip-existing
 ```
 
 Use `--skip-existing` only within this new checkout and output directory. Never

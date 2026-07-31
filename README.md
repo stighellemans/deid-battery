@@ -39,10 +39,10 @@ external API).
 > - id: deidentify
 >   runner: deidentify
 >   venv: /opt/.venv-deidentify
->   params: {model: model_bilstmcrf_ons_large-v0.2.0, chunk: 50}
+>   params: {model: model_bilstmcrf_ons_large-v0.2.0, device: cpu, chunk: 50, max_chars: 20000, overlap: 500}
 > ```
-> `chunk` runs the corpus in fresh-process slices to bound memory (50 ≈ 9 GB;
-> lower it for smaller boxes). Does **not** run on Apple Silicon — use a Linux box.
+> `max_chars` is the memory guard; `chunk` adds fault-isolation/checkpoints.
+> Does **not** run on Apple Silicon — use `--exclude deidentify` locally.
 
 ## Install
 
@@ -68,9 +68,20 @@ checkout is unavailable or its worker imports do not validate.
 Then:
 
 ```bash
-cp configs/battery.example.yaml configs/battery.yaml    # edit models/paths
 .venv/bin/python -m deid_battery.orchestrate run --config configs/battery.yaml
 ```
+
+There is deliberately only one YAML. Machine-specific choices are runtime
+flags. For Apple Silicon, for example:
+
+```bash
+.venv/bin/python -m deid_battery.orchestrate run --config configs/battery.yaml \
+  --device mps --exclude deidentify \
+  --llm-base-url http://127.0.0.1:11434/v1 --llm-model qwen3:8b
+```
+
+Use `--device cuda` on a CUDA host. Rule-based runners ignore the device; Qwen
+runs behind its own endpoint; and Deidentify stays CPU-only in its legacy venv.
 
 <details><summary>Manual install (no setup script / no uv)</summary>
 
@@ -93,7 +104,7 @@ python -m venv .venv-pf
 python -m deid_battery.inputs --config configs/battery.yaml
 #    (equivalently: --from results.jsonl --field raw_text --patient-first ... --out input.jsonl)
 
-# 2. edit configs/battery.yaml (models, device, metadata source, gold bundle)
+# 2. review configs/battery.yaml (the one benchmark definition)
 # 3. run: models -> post-process -> evaluate -> plot
 python -m deid_battery.orchestrate run --config configs/battery.yaml
 ```

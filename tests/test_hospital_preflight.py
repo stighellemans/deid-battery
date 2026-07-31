@@ -87,9 +87,9 @@ def test_preflight_rejects_missing_model_commit_and_external_llm(tmp_path):
     assert any("loopback-only" in error for error in errors)
 
 
-def test_committed_vm_config_uses_locked_models_and_local_llm(tmp_path):
+def test_canonical_config_uses_locked_models_and_local_llm(tmp_path):
     errors = check(
-        ROOT / "configs/battery.vm.yaml",
+        ROOT / "configs/battery.yaml",
         _lock(tmp_path),
         code_only=True,
         allow_dirty=True,
@@ -102,26 +102,31 @@ def _model(config: dict, model_id: str) -> dict:
     return next(model for model in config["models"] if model["id"] == model_id)
 
 
-def test_hospital_qwen_matches_validated_synthetic_generation_settings():
-    hospital = yaml.safe_load((ROOT / "configs/battery.vm.yaml").read_text())
-    synthetic = yaml.safe_load((ROOT / "configs/battery.qwen.synthetic.yaml").read_text())
-    hospital_qwen = _model(hospital, "qwen3-8b")
-    synthetic_qwen = _model(synthetic, "qwen3-8b")
+def test_canonical_qwen_keeps_validated_hospital_settings():
+    config = yaml.safe_load((ROOT / "configs/battery.yaml").read_text())
+    qwen = _model(config, "qwen3-8b")
 
-    assert hospital_qwen["device_label"] == "gpu"
-    assert hospital_qwen["params"]["base_url"] == "http://127.0.0.1:11500/v1"
-    assert hospital_qwen["params"]["model"] == "qwen3:8b-q4_K_M"
-    for key in ("prompt_dir", "temperature", "top_p", "thinking", "max_tokens", "workers"):
-        assert hospital_qwen["params"][key] == synthetic_qwen["params"][key]
+    assert qwen["device_label"] == "gpu"
+    assert qwen["params"] == {
+        "base_url": "http://127.0.0.1:11500/v1",
+        "model": "qwen3:8b-q4_K_M",
+        "prompt_dir": "prompts",
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "thinking": True,
+        "max_tokens": 8000,
+        "workers": 2,
+    }
 
 
 def test_hospital_deidentify_keeps_established_runtime_and_memory_guards():
-    hospital = yaml.safe_load((ROOT / "configs/battery.vm.yaml").read_text())
-    deidentify = _model(hospital, "deidentify")
+    config = yaml.safe_load((ROOT / "configs/battery.yaml").read_text())
+    deidentify = _model(config, "deidentify")
 
     assert deidentify["venv"] == "/opt/.venv-deidentify"
     assert deidentify["params"] == {
         "model": "model_bilstmcrf_ons_large-v0.2.0",
+        "device": "cpu",
         "chunk": 50,
         "max_chars": 20_000,
         "overlap": 500,
