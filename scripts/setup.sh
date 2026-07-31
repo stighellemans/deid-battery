@@ -105,8 +105,8 @@ fi
 
 echo
 echo "done. Next:"
-echo "  1) config:  cp configs/battery.example.yaml configs/battery.yaml   # then edit models/paths"
-echo "  2) input:   $VENV/bin/python -m deid_battery.inputs --config configs/battery.yaml"
-echo "  3) run:     $VENV/bin/python -m deid_battery.orchestrate run --config configs/battery.yaml"
+echo "  1) review the one canonical config: configs/battery.yaml"
+echo "  2) input: $VENV/bin/python -m deid_battery.inputs --config configs/battery.yaml"
+echo "  3) run:   $VENV/bin/python -m deid_battery.orchestrate run --config configs/battery.yaml"
 [ "$DO_PF" = 1 ]   && echo "  privacy filters: set  venv: ../.venv-pf  on those models in the config"
 [ "$DO_DEID" = 1 ] && echo "  deidentify:      set  venv: $(pwd)/.venv-deidentify  on that model"
