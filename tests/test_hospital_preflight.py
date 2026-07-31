@@ -28,7 +28,7 @@ def test_preflight_accepts_locked_loopback_models(tmp_path):
                 "runner": "gliner",
                 "params": {
                     "model": "urchade/gliner_multi_pii-v1",
-                    "revision": "1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d",
+                    "model_commit": "1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d",
                 },
             },
             {
@@ -44,7 +44,26 @@ def test_preflight_accepts_locked_loopback_models(tmp_path):
     assert check(config_path, _lock(tmp_path), code_only=True, allow_dirty=True) == []
 
 
-def test_preflight_rejects_floating_revision_and_external_llm(tmp_path):
+def test_preflight_accepts_legacy_revision_name(tmp_path):
+    config = {
+        "models": [
+            {
+                "id": "gliner",
+                "runner": "gliner",
+                "params": {
+                    "model": "urchade/gliner_multi_pii-v1",
+                    "revision": "1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d",
+                },
+            }
+        ]
+    }
+    config_path = tmp_path / "legacy-config.yaml"
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    assert check(config_path, _lock(tmp_path), code_only=True, allow_dirty=True) == []
+
+
+def test_preflight_rejects_missing_model_commit_and_external_llm(tmp_path):
     config = {
         "models": [
             {
@@ -64,7 +83,7 @@ def test_preflight_rejects_floating_revision_and_external_llm(tmp_path):
 
     errors = check(config_path, _lock(tmp_path), code_only=True, allow_dirty=True)
 
-    assert any("locked revision" in error for error in errors)
+    assert any("locked model commit" in error for error in errors)
     assert any("loopback-only" in error for error in errors)
 
 

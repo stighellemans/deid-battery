@@ -23,6 +23,8 @@ conditions:
   - { id: meta, name: "with metadata" }
 
 models:
+  # model_commit pins the exact Hugging Face model snapshot (a 40-character Git
+  # commit); base_model_commit does the same for a checkpoint's base model.
   - id: belgian-deduce
     runner: deduce
     params: { engine: belgian-deduce }
@@ -33,26 +35,26 @@ models:
     runner: gliner
     params:
       model: urchade/gliner_multi_pii-v1
-      revision: 1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d
+      model_commit: 1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d
       threshold: 0.5
   - id: openai-privacy-filter
     runner: hf_token
     venv: .venv-pf
     params:
       model: openai/privacy-filter
-      revision: 7ffa9a043d54d1be65afb281eddf0ffbe629385b
+      model_commit: 7ffa9a043d54d1be65afb281eddf0ffbe629385b
   - id: openmed-multilingual
     runner: hf_token
     venv: .venv-pf
     params:
       model: OpenMed/privacy-filter-multilingual
-      revision: f914f18d909d541d288dfda44a4d0b6bdb638d57
+      model_commit: f914f18d909d541d288dfda44a4d0b6bdb638d57
   - id: uza
     runner: robbert
     params:
       checkpoint: models/uza/model.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
-      base_revision: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
+      base_model_commit: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
       max_length: 512
       overlap: 64
       entity_labels:
@@ -77,7 +79,7 @@ models:
     params:
       checkpoint: models/synthetic/best.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
-      base_revision: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
+      base_model_commit: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
       max_length: 512
       overlap: 64
       # 14-label head (Stage-2 fulltrain-refit). Same label set as the uza model above.

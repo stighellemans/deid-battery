@@ -15,13 +15,13 @@ conditions:
 models:
   - {id: belgian-deduce, runner: deduce, params: {engine: belgian-deduce}}
   - {id: deduce, runner: deduce, params: {engine: deduce}}
-  - {id: gliner-pii, runner: gliner, params: {model: urchade/gliner_multi_pii-v1, revision: 1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d, threshold: 0.5}}
+  - {id: gliner-pii, runner: gliner, params: {model: urchade/gliner_multi_pii-v1, model_commit: 1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d, threshold: 0.5}}
   - id: openai-privacy-filter
     runner: hf_token
-    params: {model: openai/privacy-filter, revision: 7ffa9a043d54d1be65afb281eddf0ffbe629385b}
+    params: {model: openai/privacy-filter, model_commit: 7ffa9a043d54d1be65afb281eddf0ffbe629385b}
   - id: openmed-multilingual
     runner: hf_token
-    params: {model: OpenMed/privacy-filter-multilingual, revision: f914f18d909d541d288dfda44a4d0b6bdb638d57}
+    params: {model: OpenMed/privacy-filter-multilingual, model_commit: f914f18d909d541d288dfda44a4d0b6bdb638d57}
   - id: deidentify
     runner: deidentify
     params: {model: model_bilstmcrf_ons_large-v0.2.0}

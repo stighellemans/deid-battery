@@ -83,12 +83,14 @@ def check(
         model_name = params.get("model")
         runner = model.get("runner")
         if runner in {"gliner", "hf_token"} and model_name in pinned_models:
-            if params.get("revision") != pinned_models[model_name]:
-                errors.append(f"{model['id']} does not use the locked revision for {model_name}")
+            model_commit = params.get("model_commit", params.get("revision"))
+            if model_commit != pinned_models[model_name]:
+                errors.append(f"{model['id']} does not use the locked model commit for {model_name}")
         if runner == "robbert":
             base_model = params.get("base_model")
-            if base_model in pinned_models and params.get("base_revision") != pinned_models[base_model]:
-                errors.append(f"{model['id']} does not use the locked revision for {base_model}")
+            base_model_commit = params.get("base_model_commit", params.get("base_revision"))
+            if base_model in pinned_models and base_model_commit != pinned_models[base_model]:
+                errors.append(f"{model['id']} does not use the locked model commit for {base_model}")
         if runner == "llm":
             hostname = urlparse(str(params.get("base_url") or "")).hostname
             if hostname not in {"127.0.0.1", "localhost", "::1"}:
@@ -173,7 +175,7 @@ def main() -> int:
         for error in errors:
             print(f"  - {error}")
         return 1
-    print("hospital preflight OK: sources, revisions, endpoint policy, and required assets match")
+    print("hospital preflight OK: sources, model commits, endpoint policy, and required assets match")
     return 0
 
 

@@ -31,8 +31,10 @@ git -C deid-schema checkout cfa99eb04e7884a13e05df27f942fa03855f4209
 ```
 
 The source lock is `deployment/hospital-source-lock.json`; checkpoint hashes are
-in `deployment/hospital-models.sha256`. The preflight checks the required
-checkout, both checkpoints, and every Hugging Face model revision.
+in `deployment/hospital-models.sha256`. In the YAML, `model_commit` is the exact
+40-character Git commit for a Hugging Face model snapshot; `base_model_commit`
+is the same pin for a checkpoint's base model. The preflight checks the required
+checkout, both checkpoints, and every such model commit.
 
 ## 2. Build fresh frozen environments
 
@@ -127,7 +129,7 @@ If the process stops, resume the new run with:
 ```
 
 Use `--skip-existing` only within this new checkout and output directory. Never
-resume from outputs produced by an older code or model revision.
+resume from outputs produced by an older code or model snapshot.
 
 ## 6. Export and retain evidence
 

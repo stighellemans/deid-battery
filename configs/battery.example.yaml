@@ -54,6 +54,8 @@ conditions:
 # with a different interpreter (e.g. the transformers>=5.7 env for the filters).
 # ---------------------------------------------------------------------------
 models:
+  # model_commit is the exact 40-character Git commit for a Hugging Face model
+  # snapshot; base_model_commit applies the same pin to a checkpoint's base model.
   - id: belgian-deduce
     runner: deduce
     params: {engine: belgian-deduce}     # consumes metadata: patient+caregiver names, addresses, date
@@ -66,7 +68,7 @@ models:
     runner: gliner
     params:
       model: urchade/gliner_multi_pii-v1
-      revision: 1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d
+      model_commit: 1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d
       threshold: 0.5
 
   - id: my-robbert                       # bring-your-own dual-head checkpoint
@@ -74,18 +76,18 @@ models:
     params:
       checkpoint: /path/to/model.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
-      base_revision: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
+      base_model_commit: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
       train_metrics: /path/to/train_metrics.json   # for the label order (or set entity_labels:)
 
   - id: openai-privacy-filter
     runner: hf_token
     venv: .venv-pf                       # OpenAIPrivacyFilter arch needs transformers>=5.7
-    params: {model: openai/privacy-filter, revision: 7ffa9a043d54d1be65afb281eddf0ffbe629385b}
+    params: {model: openai/privacy-filter, model_commit: 7ffa9a043d54d1be65afb281eddf0ffbe629385b}
 
   - id: openmed-multilingual
     runner: hf_token
     venv: .venv-pf
-    params: {model: OpenMed/privacy-filter-multilingual, revision: f914f18d909d541d288dfda44a4d0b6bdb638d57}
+    params: {model: OpenMed/privacy-filter-multilingual, model_commit: f914f18d909d541d288dfda44a4d0b6bdb638d57}
 
   - id: qwen
     runner: llm

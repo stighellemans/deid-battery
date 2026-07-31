@@ -16,7 +16,7 @@ models:
     params:
       checkpoint: models/synthetic-adamw/best.pt
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
-      base_revision: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
+      base_model_commit: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
       max_length: 512
       overlap: 64
       entity_labels:

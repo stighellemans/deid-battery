@@ -175,8 +175,11 @@ def run(docs, params):
 
     base = params.get("base_model", "DTAI-KULeuven/robbert-2023-dutch-base")
     base_kwargs = {}
-    if params.get("base_revision"):
-        base_kwargs["revision"] = params["base_revision"]
+    # `revision` is Hugging Face's API name. Configs expose the clearer
+    # `base_model_commit`; retain `base_revision` for older configs.
+    base_model_commit = params.get("base_model_commit", params.get("base_revision"))
+    if base_model_commit:
+        base_kwargs["revision"] = base_model_commit
     tok = AutoTokenizer.from_pretrained(
         base, use_fast=True, add_prefix_space=True, **base_kwargs
     )

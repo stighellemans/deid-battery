@@ -130,8 +130,11 @@ def run(docs, params):
 
     model_id = params["model"]
     load_kwargs = {}
-    if params.get("revision"):
-        load_kwargs["revision"] = params["revision"]
+    # `revision` is Hugging Face's API name. Configs expose the clearer
+    # `model_commit`; retain `revision` as an input alias for older configs.
+    model_commit = params.get("model_commit", params.get("revision"))
+    if model_commit:
+        load_kwargs["revision"] = model_commit
     tok = AutoTokenizer.from_pretrained(model_id, **load_kwargs)
     model = AutoModelForTokenClassification.from_pretrained(
         model_id,

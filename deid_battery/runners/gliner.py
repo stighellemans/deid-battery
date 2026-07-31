@@ -71,8 +71,11 @@ def run(docs, params):
     from gliner import GLiNER
 
     load_kwargs = {}
-    if params.get("revision"):
-        load_kwargs["revision"] = params["revision"]
+    # `revision` is Hugging Face's API name. Configs expose the clearer
+    # `model_commit`; retain `revision` as an input alias for older configs.
+    model_commit = params.get("model_commit", params.get("revision"))
+    if model_commit:
+        load_kwargs["revision"] = model_commit
     model = GLiNER.from_pretrained(
         params.get("model", "urchade/gliner_multi_pii-v1"), **load_kwargs
     )
