@@ -30,9 +30,9 @@ git -C deid-battery pull --ff-only origin main
 git -C deid-schema checkout cfa99eb04e7884a13e05df27f942fa03855f4209
 ```
 
-The source lock is
-`deployment/hospital-source-lock.json`. The preflight checks the required
-checkout and every Hugging Face model revision against it.
+The source lock is `deployment/hospital-source-lock.json`; checkpoint hashes are
+in `deployment/hospital-models.sha256`. The preflight checks the required
+checkout, both checkpoints, and every Hugging Face model revision.
 
 ## 2. Build fresh frozen environments
 
@@ -67,8 +67,17 @@ deid-battery/
 ```
 
 Copy only these approved assets from their authoritative location. Do not copy
-old `out/` directories into the new checkout. Record the GGUF identity before
-the run:
+old `out/` directories into the new checkout. Verify the committed UZA and
+synthetic checkpoint hashes after copying:
+
+```bash
+sha256sum -c deployment/hospital-models.sha256
+```
+
+The expected synthetic artifact is the selected 14-label v2.2 checkpoint
+produced as `open-deid/models/selection/best.pt` (SHA-256
+`2f3601625462fccdad833707f7e10787fad6f180eeee93b3cb2ec22bdee97bee`).
+Record the GGUF identity separately before the run:
 
 ```bash
 sha256sum models/qwen3-8b.gguf > models/qwen3-8b.gguf.sha256

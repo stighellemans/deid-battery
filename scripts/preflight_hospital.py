@@ -14,6 +14,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOCK = ROOT / "deployment" / "hospital-source-lock.json"
+DEFAULT_MODEL_LOCK = ROOT / "deployment" / "hospital-models.sha256"
 
 
 def _git_output(repo: Path, *args: str) -> str:
@@ -46,7 +47,14 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def check(config_path: Path, lock_path: Path, *, code_only: bool, allow_dirty: bool) -> list[str]:
+def check(
+    config_path: Path,
+    lock_path: Path,
+    *,
+    code_only: bool,
+    allow_dirty: bool,
+    model_lock_path: Path = DEFAULT_MODEL_LOCK,
+) -> list[str]:
     errors: list[str] = []
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     config = _load_mapping(config_path)
@@ -90,6 +98,18 @@ def check(config_path: Path, lock_path: Path, *, code_only: bool, allow_dirty: b
 
     if code_only:
         return errors
+
+    for line in model_lock_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        expected, relative = line.split(maxsplit=1)
+        artifact = _resolve(relative.strip())
+        if not artifact.is_file():
+            errors.append(f"missing locked model artifact: {artifact}")
+        else:
+            actual = _sha256(artifact)
+            if actual != expected.lower():
+                errors.append(f"model checksum mismatch: {artifact}: {actual} != {expected}")
 
     input_path = _resolve(str(config.get("input", "")))
     if not input_path.is_file():
@@ -136,6 +156,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="configs/battery.vm.yaml")
     parser.add_argument("--lock", default=str(DEFAULT_LOCK))
+    parser.add_argument("--model-lock", default=str(DEFAULT_MODEL_LOCK))
     parser.add_argument("--code-only", action="store_true", help="skip data, model, and venv checks")
     parser.add_argument("--allow-dirty", action="store_true", help="permit local source edits")
     args = parser.parse_args()
@@ -145,6 +166,7 @@ def main() -> int:
         _resolve(args.lock),
         code_only=args.code_only,
         allow_dirty=args.allow_dirty,
+        model_lock_path=_resolve(args.model_lock),
     )
     if errors:
         print("hospital preflight FAILED:")
