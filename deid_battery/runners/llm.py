@@ -24,7 +24,7 @@ IMPORTANT -- thinking matters a lot for Qwen DEID quality. With `thinking: true`
 `/no_think` (a grammar would block the `<think>` block, and on llama.cpp the two
 cannot coexist); the model reasons, then emits JSON, which is parsed leniently
 (reasoning block stripped, truncated JSON salvaged). Empirically this cuts the
-false-positive burden ~14x vs no-think. Set `thinking: false` only for endpoints
+non-PII redaction rate ~14x vs no-think. Set `thinking: false` only for endpoints
 where you want grammar-constrained output and the model does not reason.
 """
 from __future__ import annotations

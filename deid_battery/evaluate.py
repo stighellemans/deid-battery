@@ -1,7 +1,7 @@
 """Char-level evaluation against a deid-eval-annotator gold bundle.
 
 Reuses the vendored, self-contained ``evaluate_quantity_deid`` + ``data_readers``.
-Returns the evaluation payload (essential recall, FP buckets, label confusion, ...)
+Returns the evaluation payload (core PII recall, non-PII redaction buckets, label confusion, ...)
 keyed per model, with display names attached.
 """
 from __future__ import annotations

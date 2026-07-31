@@ -1,4 +1,4 @@
-"""Essential-recall + false-positive-burden plot, from an evaluation payload.
+"""Core PII recall + non-PII redaction rate plot, from an evaluation payload.
 
 Wraps the vendored ``evaluation_plots`` (matplotlib). Sources with zero
 predictions are dropped from the plot. Returns the summary DataFrame.
@@ -35,14 +35,14 @@ def plot(payload: dict, out_path):
     summary = ep.build_summary_frame(payload)
     if not summary.empty:
         summary = summary[summary["prediction_span_count"] > 0].reset_index(drop=True)
-    ep.plot_recall_and_fp_burden(summary, output_path=out_path)
+    ep.plot_recall_and_non_pii_redaction(summary, output_path=out_path)
     return summary
 
 
 def plot_time_vs_recall(payload: dict, timings: dict, out_path,
                         include_sids=None, sid_to_model=None, sid_to_label=None,
-                        recall_key: str = "essential_recall"):
-    """Scatter of run time (x) vs essential recall (y), one dot per timings row,
+                        recall_key: str = "core_pii_recall"):
+    """Scatter of run time (x) vs core PII recall (y), one dot per timings row,
     coloured by device (cpu/gpu). ``include_sids`` restricts to the with-metadata
     sources; ``sid_to_model`` maps a source id (e.g. ``uza@meta``) to its model id
     (``uza``), the key under which times live in ``timings``; ``sid_to_label`` maps
@@ -132,7 +132,7 @@ def plot_time_vs_recall(payload: dict, timings: dict, out_path,
         ax.set_xlabel("Run time (seconds)")
     ax.set_ylim(0, 1.0)
     ax.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=0))
-    ax.set_ylabel("Essential entity detection recall (with metadata)")
+    ax.set_ylabel("Core PII recall (with metadata)")
     ax.set_title("Run Time vs. Recall", fontsize=18, weight="bold", pad=14)
     ax.grid(color="#d0d0d0", linewidth=0.8)
     ax.set_axisbelow(True)
@@ -160,18 +160,18 @@ def plot_time_vs_recall(payload: dict, timings: dict, out_path,
 
 
 def plot_recall_by_gold_label(payload: dict, out_path):
-    """Essential-recall heatmap: gold label (row) x source (col)."""
+    """Core PII recall heatmap: gold label (row) x source (col)."""
     import evaluation_plots as ep
     matrix, counts = ep.build_recall_matrix(
         payload, group_name="by_gold_label", row_key="gold_label",
-        metric_key="essential_recall", count_key="gold_span_count")
+        metric_key="core_pii_recall", count_key="gold_span_count")
     if matrix.empty:
         return None
     csv_path = _csv_beside(out_path)
     if csv_path is not None:
         _recall_matrix_to_frame(matrix, counts, "gold_label", "gold_span_count").to_csv(
             csv_path, index=False)
-    return ep.plot_recall_heatmap(matrix, counts, "Essential recall by gold label",
+    return ep.plot_recall_heatmap(matrix, counts, "Core PII recall by gold label",
                                   "spans", output_path=out_path)
 
 

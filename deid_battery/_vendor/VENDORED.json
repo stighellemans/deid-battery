@@ -1,0 +1,21 @@
+{
+  "snapshot_date": "2026-07-31",
+  "snapshot_includes_worktree_changes": false,
+  "sources": {
+    "deid-evaluation": {
+      "url": "https://github.com/stighellemans/deid-evaluation",
+      "source_commit": "4e1cccaab575a405e5b02e260f22f16ae553992a",
+      "files": {
+        "data_readers.py": "sha256:45b20509b74ab201f5ff97796c0209d13d1caae37f2e9a5d02cc30c0cc8e90d2",
+        "evaluation_plots.py": "sha256:ececa4262aca0497f00448f8b1c8c591691c31c8c21b8a25570278c6b138572c"
+      }
+    },
+    "deid-eval-annotator": {
+      "url": "https://github.com/stighellemans/deid-eval-annotator",
+      "source_commit": "97256d645935a6342205bb698e58712060198e5a",
+      "files": {
+        "evaluate_quantity_deid.py": "sha256:4a6ebd7543c361fabe4a1d412e934b6c7f60b7685feab72c6d073791b7896398"
+      }
+    }
+  }
+}

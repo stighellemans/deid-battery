@@ -126,6 +126,7 @@ def build_date_substitution_overview(
     substituted: list[dict[str, Any]] = []
     not_substituted: list[dict[str, Any]] = []
     document_creation_date = extract_document_creation_date(metadata)
+    substituted_count = 0
 
     for span in date_spans:
         source = span.get("text", "")
@@ -149,22 +150,10 @@ def build_date_substitution_overview(
                 not_substituted.append(example)
             continue
 
+        substituted_count += 1
         if len(substituted) < max_examples:
             substituted.append({**example, "substitute": substitute})
 
-    substituted_count = sum(
-        1
-        for span in date_spans
-        if pseudonymize_date_text(
-            span.get("text", ""),
-            label=span.get("label", ""),
-            date_shift_days=date_shift_days,
-            context_before=context_before(text, span),
-            context_after=context_after(text, span),
-            document_creation_date=document_creation_date,
-        )
-        is not None
-    )
     not_substituted_count = total - substituted_count
     return {
         "date_shift_days": date_shift_days,

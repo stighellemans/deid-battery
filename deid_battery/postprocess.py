@@ -56,11 +56,9 @@ def post_process(spans, text, meta=None, params=None, doc_id=None):
     use_meta = params.get("use_metadata", True) and bool(meta)
     spans = canonical(spans, text)
 
-    if use_meta and meta.get("caregivers"):
-        # vendored adder only handles the patient; inject caregivers ourselves
-        spans = canonical(md_mod.inject_name_spans(spans, text, {"caregivers": meta["caregivers"]}), text)
-
     if params.get("rules", True):
+        # the vendored post-processor recovers both patient and caregiver names
+        # from pp_meta, so no pre-injection is needed on this path
         ppfn, set_doc = _load_vendor()
         pp_meta = md_mod.to_postprocess(meta) if use_meta else None
         set_doc(doc_id)
@@ -69,9 +67,10 @@ def post_process(spans, text, meta=None, params=None, doc_id=None):
         finally:
             set_doc(None)
         spans = canonical(spans, text)
-    elif use_meta and meta.get("patient"):
-        # rules off but metadata on: still inject the patient name
-        spans = canonical(md_mod.inject_name_spans(spans, text, {"patient": meta["patient"]}), text)
+    elif use_meta and (meta.get("patient") or meta.get("caregivers")):
+        # rules off but metadata on: the post-processor never runs, so inject
+        # the metadata names ourselves
+        spans = canonical(md_mod.inject_name_spans(spans, text, meta), text)
 
     if params.get("inception", False):
         spans = canonical(_inception(spans, text, params.get("inception_lang", "nl")), text)

@@ -386,11 +386,15 @@ def load_predictions(
                 continue
 
             document_id = _prediction_document_id(row, path)
-            if isinstance(row.get("annotations"), list):
+            # Read-compat: accept canonical `spans` or legacy `annotations`.
+            span_rows = row.get("spans")
+            if not isinstance(span_rows, list):
+                span_rows = row.get("annotations")
+            if isinstance(span_rows, list):
                 if not document_id:
-                    skipped["annotationsWithoutDocumentId"] += len(row["annotations"])
+                    skipped["annotationsWithoutDocumentId"] += len(span_rows)
                     continue
-                for annotation in row["annotations"]:
+                for annotation in span_rows:
                     if not isinstance(annotation, dict):
                         skipped["annotationsWithoutUsableRange"] += 1
                         continue
@@ -595,8 +599,8 @@ def summarize_gold_characters(
 def _empty_group() -> dict[str, int]:
     return {
         "gold_span_count": 0,
-        "essential_total_chars": 0,
-        "essential_covered_chars": 0,
+        "core_pii_total_chars": 0,
+        "core_pii_covered_chars": 0,
         "excluded_total_chars": 0,
         "excluded_covered_chars": 0,
         "overall_total_chars": 0,
@@ -607,16 +611,16 @@ def _empty_group() -> dict[str, int]:
 def _add_group(
     group: dict[str, int],
     *,
-    essential_total: int,
-    essential_covered: int,
+    core_pii_total: int,
+    core_pii_covered: int,
     excluded_total: int,
     excluded_covered: int,
     overall_total: int,
     overall_covered: int,
 ) -> None:
     group["gold_span_count"] += 1
-    group["essential_total_chars"] += essential_total
-    group["essential_covered_chars"] += essential_covered
+    group["core_pii_total_chars"] += core_pii_total
+    group["core_pii_covered_chars"] += core_pii_covered
     group["excluded_total_chars"] += excluded_total
     group["excluded_covered_chars"] += excluded_covered
     group["overall_total_chars"] += overall_total
@@ -627,7 +631,7 @@ def _group_summary(key_name: str, key_value: str, group: dict[str, int]) -> dict
     return {
         key_name: key_value,
         "gold_span_count": group["gold_span_count"],
-        "essential_recall": _metric(group["essential_total_chars"], group["essential_covered_chars"]),
+        "core_pii_recall": _metric(group["core_pii_total_chars"], group["core_pii_covered_chars"]),
         "excluded_recall": _metric(group["excluded_total_chars"], group["excluded_covered_chars"]),
         "overall_recall": _metric(group["overall_total_chars"], group["overall_covered_chars"]),
     }
@@ -637,7 +641,7 @@ def _annotation_label_summary(annotation_label: str, group: dict[str, int]) -> d
     return {
         "annotation_label": annotation_label,
         "gold_span_count": group["gold_span_count"],
-        "essential_recall": _metric(group["essential_total_chars"], group["essential_covered_chars"]),
+        "core_pii_recall": _metric(group["core_pii_total_chars"], group["core_pii_covered_chars"]),
         "excluded_recall": _metric(group["excluded_total_chars"], group["excluded_covered_chars"]),
         "total_recall": _metric(group["overall_total_chars"], group["overall_covered_chars"]),
     }
@@ -647,13 +651,13 @@ def _empty_label_confusion() -> dict[str, Any]:
     return {
         "definition": (
             "Rows are gold annotation labels by default. Columns are normalized prediction labels assigned "
-            "to detected essential gold characters. Missed essential characters are excluded from the "
+            "to detected core PII characters. Missed core PII characters are excluded from the "
             "matrix cells and reported in row/overall missed counts. A secondary "
-            "by_subannotation_category view keeps the fine essential-character breakdown."
+            "by_subannotation_category view keeps the fine core-PII-character breakdown."
         ),
-        "total_essential_chars": 0,
-        "detected_essential_chars": 0,
-        "missed_essential_chars": 0,
+        "total_core_pii_chars": 0,
+        "detected_core_pii_chars": 0,
+        "missed_core_pii_chars": 0,
         "detected_recall": None,
         "matrix": [],
         "prediction_label_totals": [],
@@ -720,9 +724,9 @@ def _format_confusion_matrix(
     return [
         {
             row_key: row_value,
-            "total_essential_chars": row_totals[row_value],
-            "detected_essential_chars": row_detected[row_value],
-            "missed_essential_chars": row_totals[row_value] - row_detected[row_value],
+            "total_core_pii_chars": row_totals[row_value],
+            "detected_core_pii_chars": row_detected[row_value],
+            "missed_core_pii_chars": row_totals[row_value] - row_detected[row_value],
             "detected_recall": None
             if row_totals[row_value] == 0
             else round(row_detected[row_value] / row_totals[row_value], 6),
@@ -760,8 +764,8 @@ def _mean(values: list[float]) -> float | None:
 def _label_confusion_metrics(
     annotation_matrix: list[dict[str, Any]],
     *,
-    total_essential_chars: int,
-    detected_essential_chars: int,
+    total_core_pii_chars: int,
+    detected_core_pii_chars: int,
 ) -> dict[str, Any]:
     exact_correct_chars = 0
     coarse_correct_chars = 0
@@ -775,8 +779,8 @@ def _label_confusion_metrics(
         gold_coarse_label = _coarse_label(gold_label)
         row_exact_correct = 0
         row_coarse_correct = 0
-        row_detected_chars = int(row.get("detected_essential_chars") or 0)
-        row_total_chars = int(row.get("total_essential_chars") or 0)
+        row_detected_chars = int(row.get("detected_core_pii_chars") or 0)
+        row_total_chars = int(row.get("total_core_pii_chars") or 0)
 
         for assigned in row.get("assigned_labels") or []:
             prediction_label = str(assigned.get("prediction_label") or "")
@@ -797,17 +801,17 @@ def _label_confusion_metrics(
 
     return {
         "definition": {
-            "exact_label_accuracy_detected": "exact label match among detected essential gold characters",
-            "coarse_label_accuracy_detected": "label category before ':' matches among detected essential gold characters",
-            "exact_label_recall": "exact-label-correct detected essential chars divided by all essential gold chars",
-            "coarse_label_recall": "coarse-label-correct detected essential chars divided by all essential gold chars",
+            "exact_label_accuracy_detected": "exact label match among detected core PII characters",
+            "coarse_label_accuracy_detected": "label category before ':' matches among detected core PII characters",
+            "exact_label_recall": "exact-label-correct detected core PII characters divided by all core PII characters",
+            "coarse_label_recall": "coarse-label-correct detected core PII characters divided by all core PII characters",
         },
-        "exact_correct_essential_chars": exact_correct_chars,
-        "coarse_correct_essential_chars": coarse_correct_chars,
-        "exact_label_accuracy_detected": _fraction(exact_correct_chars, detected_essential_chars),
-        "coarse_label_accuracy_detected": _fraction(coarse_correct_chars, detected_essential_chars),
-        "exact_label_recall": _fraction(exact_correct_chars, total_essential_chars),
-        "coarse_label_recall": _fraction(coarse_correct_chars, total_essential_chars),
+        "exact_correct_core_pii_chars": exact_correct_chars,
+        "coarse_correct_core_pii_chars": coarse_correct_chars,
+        "exact_label_accuracy_detected": _fraction(exact_correct_chars, detected_core_pii_chars),
+        "coarse_label_accuracy_detected": _fraction(coarse_correct_chars, detected_core_pii_chars),
+        "exact_label_recall": _fraction(exact_correct_chars, total_core_pii_chars),
+        "coarse_label_recall": _fraction(coarse_correct_chars, total_core_pii_chars),
         "macro_exact_label_accuracy_detected": _mean(macro_exact_detected_rates),
         "macro_coarse_label_accuracy_detected": _mean(macro_coarse_detected_rates),
         "macro_exact_label_recall": _mean(macro_exact_total_rates),
@@ -815,7 +819,7 @@ def _label_confusion_metrics(
     }
 
 
-def build_essential_label_confusion(
+def build_core_pii_label_confusion(
     gold_items: list[dict[str, Any]],
     predictions_by_doc: Mapping[str, list[dict[str, Any]]],
     ignored_categories: set[str],
@@ -886,8 +890,8 @@ def build_essential_label_confusion(
                 )
                 by_annotation_label[annotation_label][assigned_label] += chars
 
-    total_essential = sum(subannotation_row_totals.values())
-    detected_essential = sum(subannotation_row_detected.values())
+    total_core_pii = sum(subannotation_row_totals.values())
+    detected_core_pii = sum(subannotation_row_detected.values())
     subannotation_matrix = _format_confusion_matrix(
         "gold_category",
         subannotation_row_totals,
@@ -903,16 +907,16 @@ def build_essential_label_confusion(
     result = _empty_label_confusion()
     result.update(
         {
-            "total_essential_chars": total_essential,
-            "detected_essential_chars": detected_essential,
-            "missed_essential_chars": total_essential - detected_essential,
+            "total_core_pii_chars": total_core_pii,
+            "detected_core_pii_chars": detected_core_pii,
+            "missed_core_pii_chars": total_core_pii - detected_core_pii,
             "detected_recall": None
-            if total_essential == 0
-            else round(detected_essential / total_essential, 6),
+            if total_core_pii == 0
+            else round(detected_core_pii / total_core_pii, 6),
             "metrics": _label_confusion_metrics(
                 annotation_matrix,
-                total_essential_chars=total_essential,
-                detected_essential_chars=detected_essential,
+                total_core_pii_chars=total_core_pii,
+                detected_core_pii_chars=detected_core_pii,
             ),
             "matrix": annotation_matrix,
             "by_subannotation_category": subannotation_matrix,
@@ -920,10 +924,10 @@ def build_essential_label_confusion(
             "prediction_label_totals": [
                 {
                     "prediction_label": prediction_label,
-                    "detected_essential_chars": chars,
-                    "fraction_of_detected_essential_chars": None
-                    if detected_essential == 0
-                    else round(chars / detected_essential, 6),
+                    "detected_core_pii_chars": chars,
+                    "fraction_of_detected_core_pii_chars": None
+                    if detected_core_pii == 0
+                    else round(chars / detected_core_pii, 6),
                 }
                 for prediction_label, chars in sorted(prediction_label_totals.items())
             ],
@@ -932,12 +936,12 @@ def build_essential_label_confusion(
     return result
 
 
-def _empty_fp_bucket() -> dict[str, Any]:
+def _empty_redaction_bucket() -> dict[str, Any]:
     return {
         "prediction_count": 0,
-        "total_fp_chars": 0,
-        "labeled_fp_chars": 0,
-        "unlabeled_fp_chars": 0,
+        "non_pii_redacted_chars": 0,
+        "labeled_redaction_chars": 0,
+        "unlabeled_redaction_chars": 0,
         "by_subannotation_category": defaultdict(int),
     }
 
@@ -958,21 +962,21 @@ def _categorize_piece(begin: int, end: int, segments: list[dict[str, Any]]) -> t
     return dict(breakdown), (end - begin) - labeled_chars
 
 
-def _summarize_fp_bucket(bucket: dict[str, Any], non_pii_chars: int | None) -> dict[str, Any]:
-    total = bucket["total_fp_chars"]
+def _summarize_redaction_bucket(bucket: dict[str, Any], non_pii_chars: int | None) -> dict[str, Any]:
+    total = bucket["non_pii_redacted_chars"]
     return {
         "prediction_count": bucket["prediction_count"],
-        "total_fp_chars": total,
-        "fraction_of_non_pii": _fraction(total, non_pii_chars),
-        "labeled_fp_chars": bucket["labeled_fp_chars"],
-        "unlabeled_fp_chars": bucket["unlabeled_fp_chars"],
-        "labeled_fraction": None if total == 0 else round(bucket["labeled_fp_chars"] / total, 6),
+        "non_pii_redacted_chars": total,
+        "rate": _fraction(total, non_pii_chars),
+        "labeled_redaction_chars": bucket["labeled_redaction_chars"],
+        "unlabeled_redaction_chars": bucket["unlabeled_redaction_chars"],
+        "labeled_fraction": None if total == 0 else round(bucket["labeled_redaction_chars"] / total, 6),
         "by_subannotation_category": [
             {
                 "category": category,
-                "fp_chars": chars,
+                "redacted_chars": chars,
                 "fraction_of_bucket": None if total == 0 else round(chars / total, 6),
-                "fraction_of_non_pii": _fraction(chars, non_pii_chars),
+                "rate": _fraction(chars, non_pii_chars),
             }
             for category, chars in sorted(bucket["by_subannotation_category"].items())
         ],
@@ -1038,9 +1042,9 @@ def evaluate_quantity_deid(
     )
     details: list[dict[str, Any]] = []
 
-    fp_buckets = {
-        "machine_only_fp": _empty_fp_bucket(),
-        "overflow_fp": _empty_fp_bucket(),
+    redaction_buckets = {
+        "machine_only_redaction": _empty_redaction_bucket(),
+        "boundary_overflow_redaction": _empty_redaction_bucket(),
     }
 
     for document_id, doc_predictions in predictions_by_doc.items():
@@ -1050,53 +1054,53 @@ def evaluate_quantity_deid(
         for prediction_index, prediction in enumerate(doc_predictions):
             pred_begin = int(prediction["begin"])
             pred_end = int(prediction["end"])
-            fp_pieces = _subtract_intervals(pred_begin, pred_end, gold_ranges)
-            if not fp_pieces:
+            non_pii_pieces = _subtract_intervals(pred_begin, pred_end, gold_ranges)
+            if not non_pii_pieces:
                 continue
 
             overlaps_gold = any(
                 _overlap(pred_begin, pred_end, gold_range["begin"], gold_range["end"]) > 0
                 for gold_range in gold_ranges
             )
-            bucket_key = "overflow_fp" if overlaps_gold else "machine_only_fp"
-            bucket = fp_buckets[bucket_key]
+            bucket_key = "boundary_overflow_redaction" if overlaps_gold else "machine_only_redaction"
+            bucket = redaction_buckets[bucket_key]
             bucket["prediction_count"] += 1
 
-            total_fp_chars = 0
-            labeled_fp_chars = 0
-            unlabeled_fp_chars = 0
+            non_pii_redacted_chars = 0
+            labeled_redaction_chars = 0
+            unlabeled_redaction_chars = 0
             breakdown: dict[str, int] = defaultdict(int)
 
-            for piece in fp_pieces:
+            for piece in non_pii_pieces:
                 piece_begin = piece["begin"]
                 piece_end = piece["end"]
                 piece_total = piece_end - piece_begin
                 piece_breakdown, piece_unlabeled = _categorize_piece(piece_begin, piece_end, doc_segments)
-                total_fp_chars += piece_total
-                unlabeled_fp_chars += piece_unlabeled
-                labeled_fp_chars += piece_total - piece_unlabeled
+                non_pii_redacted_chars += piece_total
+                unlabeled_redaction_chars += piece_unlabeled
+                labeled_redaction_chars += piece_total - piece_unlabeled
                 for category, chars in piece_breakdown.items():
                     breakdown[category] += chars
 
-            bucket["total_fp_chars"] += total_fp_chars
-            bucket["labeled_fp_chars"] += labeled_fp_chars
-            bucket["unlabeled_fp_chars"] += unlabeled_fp_chars
+            bucket["non_pii_redacted_chars"] += non_pii_redacted_chars
+            bucket["labeled_redaction_chars"] += labeled_redaction_chars
+            bucket["unlabeled_redaction_chars"] += unlabeled_redaction_chars
             for category, chars in breakdown.items():
                 bucket["by_subannotation_category"][category] += chars
 
             details.append(
                 {
-                    "row_kind": "prediction_fp",
+                    "row_kind": "non_pii_redaction",
                     "document_id": document_id,
                     "prediction_index": prediction_index,
                     "prediction_label": prediction.get("label", ""),
                     "prediction_range": {"begin": pred_begin, "end": pred_end},
-                    "fp_bucket": bucket_key,
-                    "total_fp_chars": total_fp_chars,
-                    "labeled_fp_chars": labeled_fp_chars,
-                    "unlabeled_fp_chars": unlabeled_fp_chars,
+                    "redaction_bucket": bucket_key,
+                    "non_pii_redacted_chars": non_pii_redacted_chars,
+                    "labeled_redaction_chars": labeled_redaction_chars,
+                    "unlabeled_redaction_chars": unlabeled_redaction_chars,
                     "subannotation_breakdown": [
-                        {"category": category, "fp_chars": chars}
+                        {"category": category, "redacted_chars": chars}
                         for category, chars in sorted(breakdown.items())
                     ],
                 }
@@ -1106,12 +1110,12 @@ def evaluate_quantity_deid(
         document_id = str(item["document_id"])
         pred_intervals = prediction_union_by_doc.get(document_id, [])
         gold = item["gold"]
-        gold_category = str(gold.get("Category") or "")
+        gold_category = str(gold.get("category") or gold.get("Category") or "")
         gold_label = str(gold.get("label") or "")
         annotation_label = _annotation_label(gold)
 
-        essential_total = 0
-        essential_covered = 0
+        core_pii_total = 0
+        core_pii_covered = 0
         excluded_total = 0
         excluded_covered = 0
         overall_total = 0
@@ -1129,8 +1133,8 @@ def evaluate_quantity_deid(
                 excluded_total += total_chars
                 excluded_covered += covered_chars
             else:
-                essential_total += total_chars
-                essential_covered += covered_chars
+                core_pii_total += total_chars
+                core_pii_covered += covered_chars
 
             by_subannotation_category[category]["total_chars"] += total_chars
             by_subannotation_category[category]["covered_chars"] += covered_chars
@@ -1150,8 +1154,8 @@ def evaluate_quantity_deid(
         ):
             _add_group(
                 group,
-                essential_total=essential_total,
-                essential_covered=essential_covered,
+                core_pii_total=core_pii_total,
+                core_pii_covered=core_pii_covered,
                 excluded_total=excluded_total,
                 excluded_covered=excluded_covered,
                 overall_total=overall_total,
@@ -1166,17 +1170,17 @@ def evaluate_quantity_deid(
                 "gold_index": item.get("gold_index"),
                 "gold_label": gold_label,
                 "gold_category": gold_category,
-                "gold_subtype": gold.get("Subtype"),
+                "gold_subtype": gold.get("subtype") or gold.get("Subtype"),
                 "gold_range": dict(item["review_range"]),
-                "essential_recall": _metric(essential_total, essential_covered),
+                "core_pii_recall": _metric(core_pii_total, core_pii_covered),
                 "excluded_recall": _metric(excluded_total, excluded_covered),
                 "overall_recall": _metric(overall_total, overall_covered),
                 "subannotation_breakdown": row_breakdown,
             }
         )
 
-    non_ignored_recall = _metric(overall["essential_total_chars"], overall["essential_covered_chars"])
-    essential_label_confusion = build_essential_label_confusion(
+    core_pii_recall = _metric(overall["core_pii_total_chars"], overall["core_pii_covered_chars"])
+    core_pii_label_confusion = build_core_pii_label_confusion(
         gold_items=gold_items,
         predictions_by_doc=predictions_by_doc,
         ignored_categories=ignored,
@@ -1192,9 +1196,8 @@ def evaluate_quantity_deid(
             "ignore_categories": sorted(ignored),
         },
         "gold_character_summary": gold_character_summary,
-        "non_ignored_recall": non_ignored_recall,
-        "essential_recall": non_ignored_recall,
-        "essential_label_confusion": essential_label_confusion,
+        "core_pii_recall": core_pii_recall,
+        "core_pii_label_confusion": core_pii_label_confusion,
         "excluded_recall": _metric(overall["excluded_total_chars"], overall["excluded_covered_chars"]),
         "overall_recall": _metric(overall["overall_total_chars"], overall["overall_covered_chars"]),
         "by_gold_category": [
@@ -1217,9 +1220,9 @@ def evaluate_quantity_deid(
             }
             for category, entry in sorted(by_subannotation_category.items())
         ],
-        "false_positive_summaries": {
-            bucket_key: _summarize_fp_bucket(bucket, non_pii_chars)
-            for bucket_key, bucket in fp_buckets.items()
+        "non_pii_redaction_summaries": {
+            bucket_key: _summarize_redaction_bucket(bucket, non_pii_chars)
+            for bucket_key, bucket in redaction_buckets.items()
         },
         "details": sorted(
             details,
@@ -1366,7 +1369,7 @@ def _annotation_label_cli_summary(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "annotationLabel": row["annotation_label"],
         "goldSpans": row["gold_span_count"],
-        "essentialRecall": _metric_summary(row["essential_recall"]),
+        "corePiiRecall": _metric_summary(row["core_pii_recall"]),
         "excludedRecall": _metric_summary(row["excluded_recall"]),
         "overallRecall": _metric_summary(row["total_recall"]),
     }
@@ -1378,15 +1381,15 @@ def _result_cli_summary(result: dict[str, Any]) -> dict[str, Any]:
         "predictions": result["summary"]["prediction_span_count"],
         "ignoredSubannotationCategories": result["summary"]["ignore_categories"],
         "goldCharacters": result["gold_character_summary"],
-        "essentialRecall": _metric_summary(result["essential_recall"]),
+        "corePiiRecall": _metric_summary(result["core_pii_recall"]),
         "excludedRecall": _metric_summary(result["excluded_recall"]),
         "overallRecall": _metric_summary(result["overall_recall"]),
-        "essentialLabelConfusion": result["essential_label_confusion"],
-        "falsePositives": {
-            "machineOnlyChars": result["false_positive_summaries"]["machine_only_fp"]["total_fp_chars"],
-            "machineOnlyFractionOfNonPii": result["false_positive_summaries"]["machine_only_fp"]["fraction_of_non_pii"],
-            "overflowChars": result["false_positive_summaries"]["overflow_fp"]["total_fp_chars"],
-            "overflowFractionOfNonPii": result["false_positive_summaries"]["overflow_fp"]["fraction_of_non_pii"],
+        "corePiiLabelConfusion": result["core_pii_label_confusion"],
+        "nonPiiRedaction": {
+            "machineOnlyChars": result["non_pii_redaction_summaries"]["machine_only_redaction"]["non_pii_redacted_chars"],
+            "machineOnlyRate": result["non_pii_redaction_summaries"]["machine_only_redaction"]["rate"],
+            "boundaryOverflowChars": result["non_pii_redaction_summaries"]["boundary_overflow_redaction"]["non_pii_redacted_chars"],
+            "boundaryOverflowRate": result["non_pii_redaction_summaries"]["boundary_overflow_redaction"]["rate"],
         },
         "byAnnotationLabel": [
             _annotation_label_cli_summary(row)
@@ -1419,7 +1422,7 @@ def main() -> None:
         "--ignore-categories",
         nargs="*",
         default=DEFAULT_IGNORE_CATEGORIES,
-        help="Subannotation categories excluded from essential recall.",
+        help="Subannotation categories excluded from core PII recall.",
     )
     args = parser.parse_args()
 

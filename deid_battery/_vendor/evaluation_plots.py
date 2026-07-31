@@ -42,7 +42,7 @@ SOURCE_ORDER = [
     "Deduce",
 ]
 
-FP_FRACTION_LABEL = "FP fraction of non-PII chars"
+NON_PII_REDACTION_RATE_LABEL = "Non-PII redaction rate"
 MISSED_LABEL = "(missed)"
 
 
@@ -150,23 +150,23 @@ def build_summary_frame(payload: dict[str, Any]) -> pd.DataFrame:
     for entry in payload["results"]:
         annotation_id = entry["display_annotation_id"]
         result = entry["result"]
-        label_metrics = result.get("essential_label_confusion", {}).get("metrics", {})
-        machine_only_fp = result["false_positive_summaries"]["machine_only_fp"]["total_fp_chars"]
-        overflow_fp = result["false_positive_summaries"]["overflow_fp"]["total_fp_chars"]
-        machine_only_fp_fraction = _fp_fraction_of_non_pii(result, "machine_only_fp", machine_only_fp)
-        overflow_fp_fraction = _fp_fraction_of_non_pii(result, "overflow_fp", overflow_fp)
+        label_metrics = result.get("core_pii_label_confusion", {}).get("metrics", {})
+        machine_only_redaction = result["non_pii_redaction_summaries"]["machine_only_redaction"]["non_pii_redacted_chars"]
+        boundary_overflow_redaction = result["non_pii_redaction_summaries"]["boundary_overflow_redaction"]["non_pii_redacted_chars"]
+        machine_only_redaction_fraction = _non_pii_redaction_rate(result, "machine_only_redaction", machine_only_redaction)
+        boundary_overflow_redaction_fraction = _non_pii_redaction_rate(result, "boundary_overflow_redaction", boundary_overflow_redaction)
         rows.append(
             {
                 "annotation_id": annotation_id,
                 "source": display_names[str(annotation_id)],
-                "essential_recall": _recall_value(result, "essential_recall", "non_ignored_recall"),
+                "core_pii_recall": _recall_value(result, "core_pii_recall"),
                 "overall_recall": result["overall_recall"]["recall"],
-                "machine_only_fp_chars": machine_only_fp,
-                "overflow_fp_chars": overflow_fp,
-                "total_fp_chars": machine_only_fp + overflow_fp,
-                "machine_only_fp_fraction_of_non_pii": machine_only_fp_fraction,
-                "overflow_fp_fraction_of_non_pii": overflow_fp_fraction,
-                "total_fp_fraction_of_non_pii": _sum_optional(machine_only_fp_fraction, overflow_fp_fraction),
+                "machine_only_redaction_chars": machine_only_redaction,
+                "boundary_overflow_redaction_chars": boundary_overflow_redaction,
+                "non_pii_redacted_chars": machine_only_redaction + boundary_overflow_redaction,
+                "machine_only_redaction_rate": machine_only_redaction_fraction,
+                "boundary_overflow_redaction_rate": boundary_overflow_redaction_fraction,
+                "non_pii_redaction_rate": _sum_optional(machine_only_redaction_fraction, boundary_overflow_redaction_fraction),
                 "prediction_span_count": result["summary"]["prediction_span_count"],
                 "exact_label_recall": label_metrics.get("exact_label_recall", np.nan),
                 "coarse_label_recall": label_metrics.get("coarse_label_recall", np.nan),
@@ -192,18 +192,18 @@ def build_label_quality_frame(payload: dict[str, Any]) -> pd.DataFrame:
     source_order = source_order_from_payload(payload, display_names)
     for entry in payload["results"]:
         annotation_id = str(entry["display_annotation_id"])
-        confusion = entry["result"].get("essential_label_confusion", {})
+        confusion = entry["result"].get("core_pii_label_confusion", {})
         metrics = confusion.get("metrics", {})
         rows.append(
             {
                 "annotation_id": annotation_id,
                 "source": display_names[annotation_id],
-                "total_essential_chars": confusion.get("total_essential_chars", np.nan),
-                "detected_essential_chars": confusion.get("detected_essential_chars", np.nan),
-                "missed_essential_chars": confusion.get("missed_essential_chars", np.nan),
+                "total_core_pii_chars": confusion.get("total_core_pii_chars", np.nan),
+                "detected_core_pii_chars": confusion.get("detected_core_pii_chars", np.nan),
+                "missed_core_pii_chars": confusion.get("missed_core_pii_chars", np.nan),
                 "detected_recall": confusion.get("detected_recall", np.nan),
-                "exact_correct_essential_chars": metrics.get("exact_correct_essential_chars", np.nan),
-                "coarse_correct_essential_chars": metrics.get("coarse_correct_essential_chars", np.nan),
+                "exact_correct_core_pii_chars": metrics.get("exact_correct_core_pii_chars", np.nan),
+                "coarse_correct_core_pii_chars": metrics.get("coarse_correct_core_pii_chars", np.nan),
                 "exact_label_recall": metrics.get("exact_label_recall", np.nan),
                 "coarse_label_recall": metrics.get("coarse_label_recall", np.nan),
                 "exact_label_accuracy_detected": metrics.get("exact_label_accuracy_detected", np.nan),
@@ -218,12 +218,12 @@ def build_label_quality_frame(payload: dict[str, Any]) -> pd.DataFrame:
     columns = [
         "annotation_id",
         "source",
-        "total_essential_chars",
-        "detected_essential_chars",
-        "missed_essential_chars",
+        "total_core_pii_chars",
+        "detected_core_pii_chars",
+        "missed_core_pii_chars",
         "detected_recall",
-        "exact_correct_essential_chars",
-        "coarse_correct_essential_chars",
+        "exact_correct_core_pii_chars",
+        "coarse_correct_core_pii_chars",
         "exact_label_recall",
         "coarse_label_recall",
         "exact_label_accuracy_detected",
@@ -253,7 +253,7 @@ def build_label_confusion_frame(
     for entry in payload["results"]:
         annotation_id = str(entry["display_annotation_id"])
         source = display_names[annotation_id]
-        confusion = entry["result"].get("essential_label_confusion", {})
+        confusion = entry["result"].get("core_pii_label_confusion", {})
         for row in confusion.get(view, []):
             row_label = str(row.get(row_label_key, ""))
             for assigned in row.get("assigned_labels") or []:
@@ -264,9 +264,9 @@ def build_label_confusion_frame(
                         row_label_key: row_label,
                         "prediction_label": _display_prediction_label(assigned.get("prediction_label")),
                         "chars": int(assigned.get("chars") or 0),
-                        "total_essential_chars": int(row.get("total_essential_chars") or 0),
-                        "detected_essential_chars": int(row.get("detected_essential_chars") or 0),
-                        "missed_essential_chars": int(row.get("missed_essential_chars") or 0),
+                        "total_core_pii_chars": int(row.get("total_core_pii_chars") or 0),
+                        "detected_core_pii_chars": int(row.get("detected_core_pii_chars") or 0),
+                        "missed_core_pii_chars": int(row.get("missed_core_pii_chars") or 0),
                         "detected_recall": row.get("detected_recall", np.nan),
                         "fraction_of_detected_row_chars": assigned.get("fraction_of_detected_row_chars", np.nan),
                         "fraction_of_total_row_chars": assigned.get("fraction_of_total_row_chars", np.nan),
@@ -279,9 +279,9 @@ def build_label_confusion_frame(
         row_label_key,
         "prediction_label",
         "chars",
-        "total_essential_chars",
-        "detected_essential_chars",
-        "missed_essential_chars",
+        "total_core_pii_chars",
+        "detected_core_pii_chars",
+        "missed_core_pii_chars",
         "detected_recall",
         "fraction_of_detected_row_chars",
         "fraction_of_total_row_chars",
@@ -319,11 +319,11 @@ def build_gold_character_summary_frame(payload: dict[str, Any]) -> pd.DataFrame:
     return frame
 
 
-def build_false_positive_label_frame(
+def build_non_pii_redaction_label_frame(
     payload: dict[str, Any],
-    fp_bucket: str | None = None,
+    redaction_bucket: str | None = None,
 ) -> pd.DataFrame:
-    """Summarize false positives by the prediction label assigned by the model."""
+    """Summarize non-PII redactions by the prediction label assigned by the model."""
     rows = []
     display_names = source_display_names(payload)
     source_order = source_order_from_payload(payload, display_names)
@@ -333,10 +333,10 @@ def build_false_positive_label_frame(
         grouped: dict[tuple[str, str], dict[str, Any]] = {}
 
         for detail in entry["result"].get("details", []):
-            if detail.get("row_kind") != "prediction_fp":
+            if detail.get("row_kind") != "non_pii_redaction":
                 continue
-            bucket = str(detail.get("fp_bucket", ""))
-            if fp_bucket is not None and bucket != fp_bucket:
+            bucket = str(detail.get("redaction_bucket", ""))
+            if redaction_bucket is not None and bucket != redaction_bucket:
                 continue
 
             prediction_label = _display_prediction_label(detail.get("prediction_label"))
@@ -346,48 +346,48 @@ def build_false_positive_label_frame(
                 {
                     "annotation_id": annotation_id,
                     "source": source,
-                    "fp_bucket": bucket,
+                    "redaction_bucket": bucket,
                     "prediction_label": prediction_label,
-                    "fp_prediction_count": 0,
-                    "fp_chars": 0,
+                    "redaction_prediction_count": 0,
+                    "redacted_chars": 0,
                 },
             )
-            group["fp_prediction_count"] += 1
-            group["fp_chars"] += int(detail.get("total_fp_chars", 0))
+            group["redaction_prediction_count"] += 1
+            group["redacted_chars"] += int(detail.get("non_pii_redacted_chars", 0))
 
         rows.extend(grouped.values())
 
     columns = [
         "annotation_id",
         "source",
-        "fp_bucket",
+        "redaction_bucket",
         "prediction_label",
-        "fp_prediction_count",
-        "fp_chars",
+        "redaction_prediction_count",
+        "redacted_chars",
         "fraction_of_source_bucket",
-        "fraction_of_source_fp",
-        "mean_fp_chars_per_prediction",
+        "fraction_of_source_redaction",
+        "mean_redacted_chars_per_prediction",
     ]
     frame = pd.DataFrame(rows)
     if frame.empty:
         return pd.DataFrame(columns=columns)
 
-    source_bucket_totals = frame.groupby(["source", "fp_bucket"])["fp_chars"].transform("sum")
-    source_totals = frame.groupby("source")["fp_chars"].transform("sum")
+    source_bucket_totals = frame.groupby(["source", "redaction_bucket"])["redacted_chars"].transform("sum")
+    source_totals = frame.groupby("source")["redacted_chars"].transform("sum")
     frame["fraction_of_source_bucket"] = np.where(
         source_bucket_totals == 0,
         np.nan,
-        frame["fp_chars"] / source_bucket_totals,
+        frame["redacted_chars"] / source_bucket_totals,
     )
-    frame["fraction_of_source_fp"] = np.where(source_totals == 0, np.nan, frame["fp_chars"] / source_totals)
-    frame["mean_fp_chars_per_prediction"] = np.where(
-        frame["fp_prediction_count"] == 0,
+    frame["fraction_of_source_redaction"] = np.where(source_totals == 0, np.nan, frame["redacted_chars"] / source_totals)
+    frame["mean_redacted_chars_per_prediction"] = np.where(
+        frame["redaction_prediction_count"] == 0,
         np.nan,
-        frame["fp_chars"] / frame["fp_prediction_count"],
+        frame["redacted_chars"] / frame["redaction_prediction_count"],
     )
 
     frame = frame.sort_values(
-        ["source", "fp_bucket", "fp_chars", "prediction_label"],
+        ["source", "redaction_bucket", "redacted_chars", "prediction_label"],
         ascending=[True, True, False, True],
         key=lambda values: _source_sorter(source_order)(values) if values.name == "source" else values,
     ).reset_index(drop=True)[columns]
@@ -451,16 +451,16 @@ def build_postprocess_comparison_frame(
         if pd.isna(source):
             source = _optional_value(raw_row, "source")
 
-        raw_recall = _optional_value(raw_row, "essential_recall")
-        post_recall = _optional_value(post_row, "essential_recall")
+        raw_recall = _optional_value(raw_row, "core_pii_recall")
+        post_recall = _optional_value(post_row, "core_pii_recall")
         raw_exact_label_recall = _optional_value(raw_row, "exact_label_recall")
         post_exact_label_recall = _optional_value(post_row, "exact_label_recall")
         raw_coarse_label_recall = _optional_value(raw_row, "coarse_label_recall")
         post_coarse_label_recall = _optional_value(post_row, "coarse_label_recall")
-        raw_fp = _optional_value(raw_row, "total_fp_chars")
-        post_fp = _optional_value(post_row, "total_fp_chars")
-        raw_fp_fraction = _optional_value(raw_row, "total_fp_fraction_of_non_pii")
-        post_fp_fraction = _optional_value(post_row, "total_fp_fraction_of_non_pii")
+        raw_fp = _optional_value(raw_row, "non_pii_redacted_chars")
+        post_fp = _optional_value(post_row, "non_pii_redacted_chars")
+        raw_fp_fraction = _optional_value(raw_row, "non_pii_redaction_rate")
+        post_fp_fraction = _optional_value(post_row, "non_pii_redaction_rate")
         raw_spans = _optional_value(raw_row, "prediction_span_count")
         post_spans = _optional_value(post_row, "prediction_span_count")
 
@@ -468,10 +468,10 @@ def build_postprocess_comparison_frame(
             {
                 "annotation_id": annotation_id,
                 "source": source,
-                "raw_essential_recall": raw_recall,
-                "postprocessed_essential_recall": post_recall,
-                "essential_recall_delta": _delta(post_recall, raw_recall),
-                "essential_recall_delta_pp": _scale(_delta(post_recall, raw_recall), 100),
+                "raw_core_pii_recall": raw_recall,
+                "postprocessed_core_pii_recall": post_recall,
+                "core_pii_recall_delta": _delta(post_recall, raw_recall),
+                "core_pii_recall_delta_pp": _scale(_delta(post_recall, raw_recall), 100),
                 "raw_exact_label_recall": raw_exact_label_recall,
                 "postprocessed_exact_label_recall": post_exact_label_recall,
                 "exact_label_recall_delta": _delta(post_exact_label_recall, raw_exact_label_recall),
@@ -486,13 +486,13 @@ def build_postprocess_comparison_frame(
                     _delta(post_coarse_label_recall, raw_coarse_label_recall),
                     100,
                 ),
-                "raw_total_fp_chars": raw_fp,
-                "postprocessed_total_fp_chars": post_fp,
-                "total_fp_chars_delta": _delta(post_fp, raw_fp),
-                "raw_total_fp_fraction_of_non_pii": raw_fp_fraction,
-                "postprocessed_total_fp_fraction_of_non_pii": post_fp_fraction,
-                "total_fp_fraction_of_non_pii_delta": _delta(post_fp_fraction, raw_fp_fraction),
-                "total_fp_fraction_of_non_pii_delta_pp": _scale(_delta(post_fp_fraction, raw_fp_fraction), 100),
+                "raw_non_pii_redacted_chars": raw_fp,
+                "postprocessed_non_pii_redacted_chars": post_fp,
+                "non_pii_redacted_chars_delta": _delta(post_fp, raw_fp),
+                "raw_non_pii_redaction_rate": raw_fp_fraction,
+                "postprocessed_non_pii_redaction_rate": post_fp_fraction,
+                "non_pii_redaction_rate_delta": _delta(post_fp_fraction, raw_fp_fraction),
+                "non_pii_redaction_rate_delta_pp": _scale(_delta(post_fp_fraction, raw_fp_fraction), 100),
                 "raw_prediction_span_count": raw_spans,
                 "postprocessed_prediction_span_count": post_spans,
                 "prediction_span_count_delta": _delta(post_spans, raw_spans),
@@ -519,7 +519,7 @@ def plot_postprocess_value(
         constrained_layout=True,
     )
 
-    recall_delta = df["essential_recall_delta_pp"].astype(float)
+    recall_delta = df["core_pii_recall_delta_pp"].astype(float)
     recall_limit = _symmetric_delta_limit(recall_delta, minimum=0.1)
     recall_text_offset = recall_limit * 0.015
     recall_colors = np.where(recall_delta >= 0, "#26734d", "#b23a32")
@@ -528,7 +528,7 @@ def plot_postprocess_value(
     ax_recall.set_xlim(-recall_limit, recall_limit)
     ax_recall.set_yticks(y, df["source"])
     ax_recall.invert_yaxis()
-    ax_recall.set_xlabel("Essential recall change, percentage points")
+    ax_recall.set_xlabel("Core PII recall change, percentage points")
     ax_recall.set_title("Recall Lift", fontsize=16, weight="bold", pad=14)
     ax_recall.grid(axis="x", color="#d0d0d0", linewidth=0.8)
     ax_recall.set_axisbelow(True)
@@ -546,7 +546,7 @@ def plot_postprocess_value(
             fontsize=9,
         )
 
-    fp_delta = df["total_fp_fraction_of_non_pii_delta"].astype(float)
+    fp_delta = df["non_pii_redaction_rate_delta"].astype(float)
     fp_limit = _symmetric_delta_limit(fp_delta, minimum=0.0001)
     fp_text_offset = fp_limit * 0.015
     fp_colors = np.where(fp_delta <= 0, "#26734d", "#b23a32")
@@ -556,8 +556,8 @@ def plot_postprocess_value(
     ax_fp.set_yticks(y, [])
     ax_fp.invert_yaxis()
     ax_fp.xaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=3))
-    ax_fp.set_xlabel(f"{FP_FRACTION_LABEL} change")
-    ax_fp.set_title("FP Burden Change", fontsize=16, weight="bold", pad=14)
+    ax_fp.set_xlabel(f"{NON_PII_REDACTION_RATE_LABEL} change")
+    ax_fp.set_title("Non-PII Redaction Rate Change", fontsize=16, weight="bold", pad=14)
     ax_fp.grid(axis="x", color="#d0d0d0", linewidth=0.8)
     ax_fp.set_axisbelow(True)
 
@@ -583,7 +583,7 @@ def plot_postprocess_value(
     return fig
 
 
-def plot_recall_and_fp_burden(summary_df: pd.DataFrame, output_path: Path | None = None):
+def plot_recall_and_non_pii_redaction(summary_df: pd.DataFrame, output_path: Path | None = None):
     if summary_df.empty:
         raise ValueError("No evaluation results available to plot")
 
@@ -602,7 +602,7 @@ def plot_recall_and_fp_burden(summary_df: pd.DataFrame, output_path: Path | None
     bar_colors = [palette(index % 10) for index in range(len(df))]
     ax_recall.barh(
         y,
-        df["essential_recall"],
+        df["core_pii_recall"],
         height=row_height,
         color=bar_colors,
         edgecolor="#222222",
@@ -612,12 +612,12 @@ def plot_recall_and_fp_burden(summary_df: pd.DataFrame, output_path: Path | None
     ax_recall.set_yticks(y, df["source"])
     ax_recall.invert_yaxis()
     ax_recall.xaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=0))
-    ax_recall.set_xlabel("Essential entity detection recall")
-    ax_recall.set_title("Entity Detection Recall", fontsize=18, weight="bold", pad=16)
+    ax_recall.set_xlabel("Core PII recall")
+    ax_recall.set_title("Core PII Recall", fontsize=18, weight="bold", pad=16)
     ax_recall.grid(axis="x", color="#d0d0d0", linewidth=0.8)
     ax_recall.set_axisbelow(True)
 
-    for idx, value in enumerate(df["essential_recall"]):
+    for idx, value in enumerate(df["core_pii_recall"]):
         if pd.isna(value):
             continue
         x = min(float(value) - 0.015, 0.985)
@@ -631,33 +631,33 @@ def plot_recall_and_fp_burden(summary_df: pd.DataFrame, output_path: Path | None
 
     ax_fp.barh(
         y,
-        df["machine_only_fp_fraction_of_non_pii"],
+        df["machine_only_redaction_rate"],
         height=row_height,
         color="#879393",
         edgecolor="#222222",
         linewidth=0.8,
-        label="Machine-only FP",
+        label="Machine-only redaction",
     )
     ax_fp.barh(
         y,
-        df["overflow_fp_fraction_of_non_pii"],
+        df["boundary_overflow_redaction_rate"],
         height=row_height,
-        left=df["machine_only_fp_fraction_of_non_pii"],
+        left=df["machine_only_redaction_rate"],
         color="#c7392f",
         edgecolor="#222222",
         linewidth=0.8,
-        label="Overflow FP",
+        label="Boundary-overflow redaction",
     )
     ax_fp.set_yticks(y, [])
     ax_fp.invert_yaxis()
     ax_fp.xaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=3))
-    ax_fp.set_xlabel(FP_FRACTION_LABEL)
-    ax_fp.set_title("False Positive Burden", fontsize=18, weight="bold", pad=16)
+    ax_fp.set_xlabel(NON_PII_REDACTION_RATE_LABEL)
+    ax_fp.set_title("Non-PII Redaction Rate", fontsize=18, weight="bold", pad=16)
     ax_fp.grid(axis="x", color="#d0d0d0", linewidth=0.8)
     ax_fp.set_axisbelow(True)
     ax_fp.legend(frameon=False, loc="upper right")
 
-    fp_fraction = df["total_fp_fraction_of_non_pii"]
+    fp_fraction = df["non_pii_redaction_rate"]
     fp_fraction_max = fp_fraction.max(skipna=True)
     max_total = max(float(0 if pd.isna(fp_fraction_max) else fp_fraction_max), 0.0001)
     ax_fp.set_xlim(0, max_total * 1.18)
@@ -727,7 +727,7 @@ def plot_label_quality_metrics(
         label="Coarse",
     )
     ax_recall.set_title("Label-Correct Recall", fontsize=16, weight="bold", pad=14)
-    ax_recall.set_xlabel("Detected with correct label / all essential chars")
+    ax_recall.set_xlabel("Detected with correct label / all core PII characters")
     ax_recall.set_yticks(y, df["source"])
 
     ax_accuracy.barh(
@@ -749,7 +749,7 @@ def plot_label_quality_metrics(
         label="Coarse",
     )
     ax_accuracy.set_title("Detected-Entity Label Accuracy", fontsize=16, weight="bold", pad=14)
-    ax_accuracy.set_xlabel("Correct label / detected essential chars")
+    ax_accuracy.set_xlabel("Correct label / detected core PII characters")
     ax_accuracy.set_yticks(y, [])
 
     for axis in (ax_recall, ax_accuracy):
@@ -819,11 +819,11 @@ def build_label_match_matrix(
     counts: dict[str, int] = {}
     for entry in payload["results"]:
         source = display_names[str(entry["display_annotation_id"])]
-        confusion = entry["result"].get("essential_label_confusion", {})
+        confusion = entry["result"].get("core_pii_label_confusion", {})
         for row in confusion.get("by_annotation_label", []):
             gold_label = str(row.get("annotation_label") or "")
-            total_chars = int(row.get("total_essential_chars") or 0)
-            detected_chars = int(row.get("detected_essential_chars") or 0)
+            total_chars = int(row.get("total_core_pii_chars") or 0)
+            detected_chars = int(row.get("detected_core_pii_chars") or 0)
             denominator_chars = detected_chars if denominator == "detected" else total_chars
             correct_chars = 0
             for assigned in row.get("assigned_labels") or []:
@@ -850,12 +850,12 @@ def build_label_aware_recall_frame(payload: dict[str, Any]) -> pd.DataFrame:
     for entry in payload["results"]:
         annotation_id = str(entry["display_annotation_id"])
         source = display_names[annotation_id]
-        confusion = entry["result"].get("essential_label_confusion", {})
+        confusion = entry["result"].get("core_pii_label_confusion", {})
         metrics = confusion.get("metrics", {})
-        total_chars = int(confusion.get("total_essential_chars") or 0)
-        detected_chars = int(confusion.get("detected_essential_chars") or 0)
-        exact_chars = int(metrics.get("exact_correct_essential_chars") or 0)
-        coarse_chars = int(metrics.get("coarse_correct_essential_chars") or 0)
+        total_chars = int(confusion.get("total_core_pii_chars") or 0)
+        detected_chars = int(confusion.get("detected_core_pii_chars") or 0)
+        exact_chars = int(metrics.get("exact_correct_core_pii_chars") or 0)
+        coarse_chars = int(metrics.get("coarse_correct_core_pii_chars") or 0)
         category_only_chars = max(coarse_chars - exact_chars, 0)
         incorrect_category_chars = max(detected_chars - coarse_chars, 0)
         missed_chars = max(total_chars - detected_chars, 0)
@@ -864,8 +864,8 @@ def build_label_aware_recall_frame(payload: dict[str, Any]) -> pd.DataFrame:
             {
                 "annotation_id": annotation_id,
                 "source": source,
-                "total_essential_chars": total_chars,
-                "detected_essential_chars": detected_chars,
+                "total_core_pii_chars": total_chars,
+                "detected_core_pii_chars": detected_chars,
                 "exact_category_subtype_chars": exact_chars,
                 "correct_category_only_chars": category_only_chars,
                 "incorrect_category_chars": incorrect_category_chars,
@@ -895,11 +895,11 @@ def build_label_aware_gold_label_frame(payload: dict[str, Any]) -> pd.DataFrame:
     for entry in payload["results"]:
         annotation_id = str(entry["display_annotation_id"])
         source = display_names[annotation_id]
-        confusion = entry["result"].get("essential_label_confusion", {})
+        confusion = entry["result"].get("core_pii_label_confusion", {})
         for group in confusion.get("by_annotation_label", []):
             gold_label = str(group.get("annotation_label") or "")
-            total_chars = int(group.get("total_essential_chars") or 0)
-            detected_chars = int(group.get("detected_essential_chars") or 0)
+            total_chars = int(group.get("total_core_pii_chars") or 0)
+            detected_chars = int(group.get("detected_core_pii_chars") or 0)
             exact_chars = 0
             coarse_chars = 0
             for assigned in group.get("assigned_labels") or []:
@@ -915,8 +915,8 @@ def build_label_aware_gold_label_frame(payload: dict[str, Any]) -> pd.DataFrame:
                     "annotation_id": annotation_id,
                     "source": source,
                     "annotation_label": gold_label,
-                    "total_essential_chars": total_chars,
-                    "detected_essential_chars": detected_chars,
+                    "total_core_pii_chars": total_chars,
+                    "detected_core_pii_chars": detected_chars,
                     "exact_category_subtype_chars": exact_chars,
                     "correct_category_chars": coarse_chars,
                     "incorrect_category_chars": max(detected_chars - coarse_chars, 0),
@@ -948,7 +948,7 @@ def build_annotation_confusion_matrices(
     for entry in payload["results"]:
         annotation_id = str(entry["display_annotation_id"])
         source = display_names[annotation_id]
-        confusion = entry["result"].get("essential_label_confusion", {})
+        confusion = entry["result"].get("core_pii_label_confusion", {})
         rows = confusion.get("by_annotation_label", [])
         if not rows:
             continue
@@ -958,8 +958,8 @@ def build_annotation_confusion_matrices(
         prediction_totals: Counter[str] = Counter()
         for row in rows:
             gold_label = str(row.get("annotation_label") or "")
-            total_chars = int(row.get("total_essential_chars") or 0)
-            missed_chars = int(row.get("missed_essential_chars") or 0)
+            total_chars = int(row.get("total_core_pii_chars") or 0)
+            missed_chars = int(row.get("missed_core_pii_chars") or 0)
             counts[gold_label] = total_chars
             raw_values.setdefault(gold_label, {})
             if missed_chars:
@@ -1022,7 +1022,6 @@ def _is_plottable_subannotation_category(group: dict[str, Any]) -> bool:
     aggregate_category_names = {
         "all_non_ignored",
         "non_ignored",
-        "non_ignored_recall",
         "all_but_ignored",
         "all_except_ignored",
         "all_except_ignored_categories",
@@ -1030,7 +1029,7 @@ def _is_plottable_subannotation_category(group: dict[str, Any]) -> bool:
         "everything_but_ignored_categories",
         "everything_except_ignored",
         "everything_except_ignored_categories",
-        "essential_recall",
+        "core_pii_recall",
     }
     return category not in aggregate_category_names
 
@@ -1132,7 +1131,7 @@ def plot_annotation_confusion_heatmap(
             )
 
     colorbar = fig.colorbar(image, ax=ax, fraction=0.035, pad=0.02)
-    colorbar.set_label("Share of gold essential chars")
+    colorbar.set_label("Share of gold core PII characters")
     colorbar.ax.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=0))
 
     for spine in ax.spines.values():
@@ -1181,8 +1180,8 @@ def plot_label_aware_recall_stack(
     ax.set_yticks(y, df["source"])
     ax.invert_yaxis()
     ax.xaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=0))
-    ax.set_xlabel("Share of all essential gold chars")
-    ax.set_title("Label-Aware Essential Recall", fontsize=18, weight="bold", pad=16)
+    ax.set_xlabel("Share of all core PII characters")
+    ax.set_title("Label-Aware Core PII Recall", fontsize=18, weight="bold", pad=16)
     ax.grid(axis="x", color="#d0d0d0", linewidth=0.8)
     ax.set_axisbelow(True)
     ax.legend(
@@ -1224,7 +1223,7 @@ def plot_label_aware_detection_heatmap(
 
     source_names = _ordered_unique_sources(gold_label_df)
     label_counts = (
-        gold_label_df.groupby("annotation_label")["total_essential_chars"].max().astype(int).to_dict()
+        gold_label_df.groupby("annotation_label")["total_core_pii_chars"].max().astype(int).to_dict()
     )
     gold_labels = sorted(
         label_counts,
@@ -1330,11 +1329,11 @@ def plot_label_aware_detection_heatmap(
     return fig
 
 
-def build_false_positive_label_matrix(
+def build_non_pii_redaction_label_matrix(
     payload: dict[str, Any],
-    fp_bucket: str | None = None,
+    redaction_bucket: str | None = None,
 ) -> tuple[pd.DataFrame, dict[str, int]]:
-    label_df = build_false_positive_label_frame(payload, fp_bucket=fp_bucket)
+    label_df = build_non_pii_redaction_label_frame(payload, redaction_bucket=redaction_bucket)
     display_names = source_display_names(payload)
     source_names = _ordered_source_names(payload, display_names)
 
@@ -1345,21 +1344,21 @@ def build_false_positive_label_matrix(
 
     grouped = (
         label_df.groupby(["prediction_label", "source"], as_index=False)
-        .agg(fp_chars=("fp_chars", "sum"), fp_prediction_count=("fp_prediction_count", "sum"))
+        .agg(redacted_chars=("redacted_chars", "sum"), redaction_prediction_count=("redaction_prediction_count", "sum"))
     )
-    source_totals = grouped.groupby("source")["fp_chars"].transform("sum")
-    grouped["fraction_of_source_fp"] = np.where(source_totals == 0, np.nan, grouped["fp_chars"] / source_totals)
+    source_totals = grouped.groupby("source")["redacted_chars"].transform("sum")
+    grouped["fraction_of_source_redaction"] = np.where(source_totals == 0, np.nan, grouped["redacted_chars"] / source_totals)
 
-    matrix = grouped.pivot(index="prediction_label", columns="source", values="fraction_of_source_fp")
+    matrix = grouped.pivot(index="prediction_label", columns="source", values="fraction_of_source_redaction")
     matrix = matrix.reindex(columns=source_names)
-    counts = grouped.groupby("prediction_label")["fp_chars"].sum().astype(int).to_dict()
+    counts = grouped.groupby("prediction_label")["redacted_chars"].sum().astype(int).to_dict()
     if not matrix.empty:
         matrix = matrix.loc[sorted(matrix.index, key=lambda label: (-counts.get(label, 0), str(label)))]
     matrix.attrs["source_order"] = source_names
     return matrix, counts
 
 
-def plot_false_positive_label_distribution(
+def plot_non_pii_redaction_label_distribution(
     matrix: pd.DataFrame,
     counts: dict[str, int],
     title: str,
@@ -1395,7 +1394,7 @@ def plot_false_positive_label_distribution(
             ax.text(col_index, row_index, f"{value * 100:.1f}%", ha="center", va="center", color=text_color, fontsize=8)
 
     colorbar = fig.colorbar(image, ax=ax, fraction=0.035, pad=0.02)
-    colorbar.set_label("Share of source FP chars")
+    colorbar.set_label("Share of source non-PII redacted characters")
     colorbar.ax.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=0))
 
     for spine in ax.spines.values():
@@ -1416,7 +1415,7 @@ def save_quantity_evaluation_plots(payload: dict[str, Any], figures_dir: Path | 
         payload=payload,
         group_name="by_annotation_label",
         row_key="annotation_label",
-        metric_key="essential_recall",
+        metric_key="core_pii_recall",
         count_key="gold_span_count",
     )
     subannotation_matrix, subannotation_counts = build_recall_matrix(
@@ -1427,8 +1426,8 @@ def save_quantity_evaluation_plots(payload: dict[str, Any], figures_dir: Path | 
         count_key="total_chars",
         row_filter=_is_plottable_subannotation_category,
     )
-    fp_label_df = build_false_positive_label_frame(payload)
-    fp_label_matrix, fp_label_counts = build_false_positive_label_matrix(payload)
+    fp_label_df = build_non_pii_redaction_label_frame(payload)
+    fp_label_matrix, fp_label_counts = build_non_pii_redaction_label_matrix(payload)
     label_quality_df = build_label_quality_frame(payload)
     label_aware_recall_df = build_label_aware_recall_frame(payload)
     label_aware_gold_label_df = build_label_aware_gold_label_frame(payload)
@@ -1450,9 +1449,9 @@ def save_quantity_evaluation_plots(payload: dict[str, Any], figures_dir: Path | 
         "annotation_label_counts": annotation_label_counts,
         "subannotation_matrix": subannotation_matrix,
         "subannotation_counts": subannotation_counts,
-        "false_positive_label_df": fp_label_df,
-        "false_positive_label_matrix": fp_label_matrix,
-        "false_positive_label_counts": fp_label_counts,
+        "non_pii_redaction_label_df": fp_label_df,
+        "non_pii_redaction_label_matrix": fp_label_matrix,
+        "non_pii_redaction_label_counts": fp_label_counts,
         "label_quality_df": label_quality_df,
         "label_aware_recall_df": label_aware_recall_df,
         "label_aware_gold_label_df": label_aware_gold_label_df,
@@ -1460,25 +1459,25 @@ def save_quantity_evaluation_plots(payload: dict[str, Any], figures_dir: Path | 
         "coarse_label_match_matrix": coarse_label_match_matrix,
         "label_match_counts": label_match_counts,
         "annotation_confusion_matrices": annotation_confusion_matrices,
-        "recall_fp_figure": plot_recall_and_fp_burden(
+        "core_pii_recall_non_pii_redaction_figure": plot_recall_and_non_pii_redaction(
             summary_df,
-            figures_path / "essential_recall_fp_burden.png",
+            figures_path / "core_pii_recall_non_pii_redaction.png",
         ),
         "annotation_label_figure": plot_recall_heatmap(
             annotation_label_matrix,
             annotation_label_counts,
-            title="Entity Detection Recall By Gold Label",
+            title="Core PII Recall By Gold Label",
             count_unit="spans",
             output_path=figures_path / "recall_by_gold_label.png",
-            colorbar_label="Entity detection recall",
+            colorbar_label="Core PII recall",
         ),
         "subannotation_figure": plot_recall_heatmap(
             subannotation_matrix,
             subannotation_counts,
-            title="Entity Detection Recall By Subannotation Category",
+            title="Core PII Recall By Subannotation Category",
             count_unit="chars",
             output_path=figures_path / "recall_by_subannotation_category.png",
-            colorbar_label="Entity detection recall",
+            colorbar_label="Core PII recall",
         ),
     }
     if not label_quality_df.empty and label_quality_df["exact_label_recall"].notna().any():
@@ -1491,7 +1490,7 @@ def save_quantity_evaluation_plots(payload: dict[str, Any], figures_dir: Path | 
     if not label_aware_recall_df.empty:
         artifacts["label_aware_recall_figure"] = plot_label_aware_recall_stack(
             label_aware_recall_df,
-            figures_path / "label_aware_essential_recall.png",
+            figures_path / "label_aware_core_pii_recall.png",
         )
     else:
         artifacts["label_aware_recall_figure"] = None
@@ -1537,14 +1536,14 @@ def save_quantity_evaluation_plots(payload: dict[str, Any], figures_dir: Path | 
             output_path=output_path,
         )
     if not fp_label_matrix.empty:
-        artifacts["false_positive_label_figure"] = plot_false_positive_label_distribution(
+        artifacts["non_pii_redaction_label_figure"] = plot_non_pii_redaction_label_distribution(
             fp_label_matrix,
             fp_label_counts,
-            title="False Positive Labels",
-            output_path=figures_path / "false_positive_labels.png",
+            title="Non-PII Redaction Labels",
+            output_path=figures_path / "non_pii_redaction_labels.png",
         )
     else:
-        artifacts["false_positive_label_figure"] = None
+        artifacts["non_pii_redaction_label_figure"] = None
     return artifacts
 
 
@@ -1578,14 +1577,14 @@ def _optional_value(row: pd.Series | None, key: str):
     return row.get(key, np.nan)
 
 
-def _recall_value(result: dict[str, Any], preferred_key: str, fallback_key: str):
-    metric = result.get(preferred_key) or result.get(fallback_key) or {}
+def _recall_value(result: dict[str, Any], preferred_key: str):
+    metric = result.get(preferred_key) or {}
     return metric.get("recall", np.nan)
 
 
-def _fp_fraction_of_non_pii(result: dict[str, Any], bucket_key: str, fallback_chars: int):
-    bucket = result.get("false_positive_summaries", {}).get(bucket_key, {})
-    fraction = bucket.get("fraction_of_non_pii")
+def _non_pii_redaction_rate(result: dict[str, Any], bucket_key: str, fallback_chars: int):
+    bucket = result.get("non_pii_redaction_summaries", {}).get(bucket_key, {})
+    fraction = bucket.get("rate")
     if fraction is not None:
         return fraction
 
@@ -1665,8 +1664,8 @@ def _annotate_grouped_percent_bars(axis, y_positions: np.ndarray, values: pd.Ser
 
 def _annotate_detected_pool(axis, y_positions: np.ndarray, frame: pd.DataFrame) -> None:
     for y, row in zip(y_positions, frame.to_dict(orient="records")):
-        detected_chars = row.get("detected_essential_chars")
-        total_chars = row.get("total_essential_chars")
+        detected_chars = row.get("detected_core_pii_chars")
+        total_chars = row.get("total_core_pii_chars")
         detected_recall = row.get("detected_recall")
         if pd.isna(detected_chars) or pd.isna(total_chars) or pd.isna(detected_recall):
             continue

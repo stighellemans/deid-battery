@@ -268,15 +268,15 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
                            ev.get("ignore_categories"), names, order, out)
         (out / "quantity_payload.json").write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        summary = run_plot(payload, str(out / ev.get("plot", "recall_fp_burden.png")))
+        summary = run_plot(payload, str(out / ev.get("plot", "core_pii_recall_non_pii_redaction.png")))
         # Record each source's measured run time (from timings.yaml) in summary.csv too.
         summary["measured_seconds"] = summary["annotation_id"].map(
             lambda s: timing_mod.measured_seconds(timings.get(sid_model.get(str(s), str(s)), [])))
         summary.to_csv(out / "summary.csv", index=False)
-        cols = ["source", "essential_recall", "total_fp_fraction_of_non_pii",
+        cols = ["source", "core_pii_recall", "non_pii_redaction_rate",
                 "prediction_span_count", "measured_seconds"]
         print(summary[[c for c in cols if c in summary.columns]].to_string(index=False))
-        print(f"\nplot -> {out / ev.get('plot', 'recall_fp_burden.png')}")
+        print(f"\nplot -> {out / ev.get('plot', 'core_pii_recall_non_pii_redaction.png')}")
 
         # Time vs. recall (with-metadata condition), one dot per timings row, coloured
         # by device (cpu/gpu). Needs at least one (measured or manual) row in timings.yaml.

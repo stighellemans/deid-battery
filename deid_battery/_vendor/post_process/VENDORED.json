@@ -1,0 +1,12 @@
+{
+  "vendored_from": "https://github.com/stighellemans/post-process",
+  "source_commit": "e23ed66d85865f8877a9accea60603710ea140ae",
+  "snapshot_includes_worktree_changes": false,
+  "files": [
+    "date_pseudonyms.py",
+    "post_process.py",
+    "post_process_overview.py"
+  ],
+  "why": "This consumer intentionally ships a self-contained copy of the canonical modules rather than requiring a runtime Git checkout.",
+  "do_not_edit_here": "Edit the canonical modules in post-process, then run python scripts/sync_downstream_copies.py --sync"
+}

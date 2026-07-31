@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "deid-battery"
 version = "0.1.0"
-description = "A portable, config-driven battery of de-identification systems: unified spans, metadata injection, and essential-recall / false-positive-burden evaluation."
+description = "A portable, config-driven battery of de-identification systems with unified spans, metadata injection, core PII recall, and non-PII redaction-rate evaluation."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

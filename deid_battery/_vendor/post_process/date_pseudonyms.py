@@ -19,6 +19,15 @@ DateGranularity = Literal[
     "range",
 ]
 REFERENCE_YEAR_FOR_YEARLESS_DATES = 2000
+MIN_RECOMMENDED_ABS_DATE_SHIFT_DAYS = 366
+
+
+def is_weak_date_shift(date_shift_days: int | None) -> bool:
+    """Return whether an offset falls within the literature-informed warning range."""
+    return (
+        date_shift_days is not None
+        and abs(date_shift_days) < MIN_RECOMMENDED_ABS_DATE_SHIFT_DAYS
+    )
 
 DUTCH_MONTHS_FULL = (
     "januari",
@@ -79,6 +88,12 @@ WEEKDAY_PREFIX_RE = re.compile(
     r"ma|di|wo|do|vr|za|zo)(?P<sep>\s*,?\s+)(?P<body>.+)$",
     re.IGNORECASE,
 )
+APOSTROPHE_SHORT_YEAR_RE = re.compile(
+    r"(?P<prefix>['’])(?P<year>\d{2})$"
+)
+NUMERIC_DAY_MONTH_TRAILING_DOT_RE = re.compile(
+    r"^(?P<body>\d{1,2}\s*[/-]\s*\d{1,2})(?P<punct>\.)$"
+)
 NUMERIC_DMY_RE = re.compile(
     r"^(?P<day>\d{1,2})(?P<sep1>\s*[/-]\s*)(?P<month>\d{1,2})(?P<sep2>\s*[/-]\s*)(?P<year>\d{2}|\d{4})$"
 )
@@ -110,6 +125,16 @@ NUMERIC_DMY_RANGE_RE = re.compile(
     r"(?P<range_sep>\s*[-–—]\s*)"
     r"(?P<end_day>\d{1,2})(?P=date_sep)(?P<end_month>\d{1,2})"
     r"(?:(?P=date_sep)(?P<end_year>\d{2}|\d{4}))?$"
+)
+WORD_NUMERIC_DMY_RANGE_RE = re.compile(
+    r"^(?P<start_day>\d{1,2})(?P<start_sep1>[/-])"
+    r"(?P<start_month>\d{1,2})(?P<start_sep2>[/-])"
+    r"(?P<start_year>\d{2}|\d{4})"
+    r"(?P<range_sep>\s+(?:tot|t/m)\s+)"
+    r"(?P<end_day>\d{1,2})(?P<end_sep1>[/-])"
+    r"(?P<end_month>\d{1,2})(?P<end_sep2>[/-])"
+    r"(?P<end_year>\d{2}|\d{4})$",
+    re.IGNORECASE,
 )
 TEXTUAL_DMY_RE = re.compile(
     r"^(?P<day>\d{1,2})(?P<sep1>\s+|\s*[-/]\s*)(?P<month>[A-Za-zÀ-ÿ]+)"
@@ -166,23 +191,64 @@ APPROX_YEAR_RE = re.compile(
     re.IGNORECASE,
 )
 TRAILING_YEAR_RE = re.compile(r"(?<!\d)(?P<year>[12]\d{3})\s*$")
-AGE_GRANULAR_RE = re.compile(
-    r"^\s*\d{1,3}(?:[.,]\d+)?\s*(?:-|–|—)?\s*"
-    r"(?:jaar|jaren|jarige|jarig|jr|j|year|years|yr|yrs|"
-    r"maand|maanden|mnd|month|months|mo|mos|m|"
-    r"week|weken|wk|w|dag|dagen|day|days|d)\b"
-    r"(?:\s+(?:jongere|ouder))?\s*$",
+AGE_UNIT_ALIASES: dict[str, tuple[str, str]] = {
+    "jaar": ("year", "nl"),
+    "jaren": ("year", "nl"),
+    "jarig": ("year", "nl"),
+    "jarige": ("year", "nl"),
+    "jr": ("year", "nl"),
+    "j": ("year", "nl"),
+    "year": ("year", "en"),
+    "years": ("year", "en"),
+    "yr": ("year", "en"),
+    "yrs": ("year", "en"),
+    "maand": ("month", "nl"),
+    "maanden": ("month", "nl"),
+    "mnd": ("month", "nl"),
+    "m": ("month", "nl"),
+    "month": ("month", "en"),
+    "months": ("month", "en"),
+    "mo": ("month", "en"),
+    "mos": ("month", "en"),
+    "week": ("week", "nl"),
+    "weken": ("week", "nl"),
+    "wk": ("week", "nl"),
+    "w": ("week", "nl"),
+    "weeks": ("week", "en"),
+    "wks": ("week", "en"),
+    "dag": ("day", "nl"),
+    "dagen": ("day", "nl"),
+    "d": ("day", "nl"),
+    "day": ("day", "en"),
+    "days": ("day", "en"),
+}
+AGE_UNIT_WORDS: dict[str, dict[str, tuple[str, str]]] = {
+    "nl": {
+        "year": ("jaar", "jaar"),
+        "month": ("maand", "maanden"),
+        "week": ("week", "weken"),
+        "day": ("dag", "dagen"),
+    },
+    "en": {
+        "year": ("year", "years"),
+        "month": ("month", "months"),
+        "week": ("week", "weeks"),
+        "day": ("day", "days"),
+    },
+}
+AGE_UNIT_ABBREVIATIONS = frozenset(
+    {"jr", "j", "yr", "yrs", "mnd", "m", "mo", "mos", "wk", "w", "wks", "d"}
+)
+AGE_ADJECTIVAL_TOKENS = frozenset({"jarig", "jarige"})
+AGE_SUFFIX_RE = re.compile(r"\s+(?:jongere|ouder)$", re.IGNORECASE)
+AGE_APPROX_PREFIX_RE = re.compile(
+    r"^(?:ca\.?|circa|rond|bijna|ongeveer|\+\s*/\s*-|±)\s*",
     re.IGNORECASE,
 )
-AGE_COMPOSITE_RE = re.compile(
-    r"^\s*"
-    r"\d{1,3}(?:[.,]\d+)?\s*"
-    r"(?:jaar|jaren|year|years|yr|yrs|jr|j|maand|maanden|month|months|mo|mos|m|dag|dagen|day|days|d)\b"
-    r"(?:\s*,?\s+"
-    r"\d{1,3}(?:[.,]\d+)?\s*"
-    r"(?:jaar|jaren|year|years|yr|yrs|jr|j|maand|maanden|month|months|mo|mos|m|dag|dagen|day|days|d)\b"
-    r")+\s*$",
-    re.IGNORECASE,
+AGE_PART_RE = re.compile(
+    r"(?P<value>\d{1,3})(?:[.,](?P<fraction>\d+))?"
+    r"(?P<gap>\s*(?:-|–|—)?\s*)"
+    r"(?P<unit>[A-Za-z]+)"
 )
 AGE_STANDALONE_RE = re.compile(r"^\s*(?P<age>\d{1,3})(?:[.,]\d+)?\s*$")
 AGE_BIRTHDATE_CONTEXT_RE = re.compile(
@@ -193,6 +259,11 @@ AGE_BIRTHDATE_CONTEXT_RE = re.compile(
     r"\b(?:leeftijd|age|jaren|maanden|dagen|jaar|maand|dag|"
     r"years|months|days|year|month|day)\b"
     r")",
+    re.IGNORECASE,
+)
+BIRTHDATE_COMPONENT_CONTEXT_RE = re.compile(
+    r"\b(?:birth|birty|geboorte)[\w\s:._/-]{0,24}?"
+    r"(?P<component>year|month|day|jaar|maand|dag)\b",
     re.IGNORECASE,
 )
 
@@ -214,6 +285,31 @@ def pseudonymize_date_text(
     context_before: str = "",
     context_after: str = "",
     document_creation_date: str | None = None,
+    birthdate_replacement_mode: str = "age",
+) -> str | None:
+    substitute = pseudonymize_date_text_body(
+        text,
+        label=label,
+        date_shift_days=date_shift_days,
+        context_before=context_before,
+        context_after=context_after,
+        document_creation_date=document_creation_date,
+        birthdate_replacement_mode=birthdate_replacement_mode,
+    )
+    if substitute is None:
+        return None
+    return bracket_substitute(substitute)
+
+
+def pseudonymize_date_text_body(
+    text: str,
+    *,
+    label: str,
+    date_shift_days: int | None,
+    context_before: str = "",
+    context_after: str = "",
+    document_creation_date: str | None = None,
+    birthdate_replacement_mode: str = "age",
 ) -> str | None:
     if date_shift_days is None:
         return None
@@ -221,8 +317,28 @@ def pseudonymize_date_text(
     document_date = parse_document_creation_date(document_creation_date)
 
     if label == "Age_Birthdate":
-        if AGE_GRANULAR_RE.fullmatch(text) or AGE_COMPOSITE_RE.fullmatch(text):
-            return text
+        age_expression = parse_age_expression(text)
+        if age_expression is not None:
+            # An age is already a duration, so unlike a birthdate it needs no
+            # document creation date to be interpreted. The bands are still
+            # derived by anchoring the duration to a reference date: when the
+            # caller supplied one we use it, so an age and the equivalent
+            # birthdate read the same. Otherwise we anchor to a fixed internal
+            # date, which keeps the output deterministic.
+            #
+            # The anchor is not entirely neutral, because calendar months vary
+            # in length: an expression sitting exactly on a band edge can fall
+            # either side of it depending on where it is anchored. "3 maanden"
+            # is the case in practice — it is 89-92 days, and the weeks band
+            # ends at 90. January 1st is chosen because counting back over the
+            # 31-day months keeps such expressions in the coarser band, which
+            # is the granularity the source already used.
+            reference_date = (
+                document_date + timedelta(days=date_shift_days)
+                if document_date is not None
+                else date(REFERENCE_YEAR_FOR_YEARLESS_DATES, 1, 1)
+            )
+            return render_age_expression(age_expression, reference_date)
         standalone_substitute = pseudonymize_standalone_age_birthdate(
             text,
             date_shift_days=date_shift_days,
@@ -252,10 +368,31 @@ def pseudonymize_date_text(
     shifted_end = parsed.end + timedelta(days=date_shift_days)
 
     if label == "Age_Birthdate":
+        shifted_document_date = (
+            document_date + timedelta(days=date_shift_days) if document_date else None
+        )
+        if (
+            birthdate_replacement_mode != "year_fallback"
+            and shifted_document_date is not None
+        ):
+            age_substitute = render_birthdate_age_interval(
+                shifted_start,
+                shifted_end,
+                shifted_document_date,
+            )
+            if age_substitute is not None:
+                return age_substitute
         return render_year_interval(shifted_start.year, shifted_end.year)
     if label == "Date":
         return render_shifted_date(parsed, shifted_start, shifted_end, text)
     return None
+
+
+def bracket_substitute(substitute: str) -> str:
+    stripped = substitute.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        return stripped
+    return f"[{stripped}]"
 
 
 def parse_date_text(text: str, *, document_date: date | None = None) -> ParsedDate:
@@ -266,11 +403,25 @@ def parse_date_text(text: str, *, document_date: date | None = None) -> ParsedDa
         prefix = (prefix_match.group("weekday"), prefix_match.group("sep"))
         body = prefix_match.group("body")
 
+    year_prefix = ""
+    apostrophe_year = APOSTROPHE_SHORT_YEAR_RE.search(body)
+    if apostrophe_year:
+        year_prefix = apostrophe_year.group("prefix")
+        body = f"{body[:apostrophe_year.start()]}{apostrophe_year.group('year')}"
+
+    terminal_punctuation = ""
+    trailing_dot = NUMERIC_DAY_MONTH_TRAILING_DOT_RE.fullmatch(body)
+    if trailing_dot:
+        body = trailing_dot.group("body")
+        terminal_punctuation = trailing_dot.group("punct")
+
     parsed = parse_date_body(body, document_date=document_date)
-    if leading or trailing:
+    if leading or trailing or year_prefix or terminal_punctuation:
         style = dict(parsed.style)
         style["leading_ws"] = leading
         style["trailing_ws"] = trailing
+        style["year_prefix"] = year_prefix
+        style["terminal_punctuation"] = terminal_punctuation
         return ParsedDate(
             start=parsed.start,
             end=parsed.end,
@@ -348,6 +499,53 @@ def parse_date_body(body: str, *, document_date: date | None = None) -> ParsedDa
                 "start_sep": textual_month_year_range.group("start_sep"),
                 "end_sep": textual_month_year_range.group("end_sep"),
                 "range_sep": textual_month_year_range.group("range_sep"),
+            },
+        )
+
+    word_numeric_range = WORD_NUMERIC_DMY_RANGE_RE.fullmatch(body)
+    if word_numeric_range:
+        start_year_token = word_numeric_range.group("start_year")
+        end_year_token = word_numeric_range.group("end_year")
+        try:
+            start_date = date(
+                expand_year(start_year_token, document_date=document_date),
+                int(word_numeric_range.group("start_month")),
+                int(word_numeric_range.group("start_day")),
+            )
+            end_date = date(
+                expand_year(end_year_token, document_date=document_date),
+                int(word_numeric_range.group("end_month")),
+                int(word_numeric_range.group("end_day")),
+            )
+        except ValueError as exc:
+            raise ValueError("invalid word-separated numeric range") from exc
+        if end_date < start_date:
+            raise ValueError("date range ends before it starts")
+        return ParsedDate(
+            start=start_date,
+            end=end_date,
+            granularity="range",
+            style={
+                "kind": "word_numeric_range",
+                "start_day_width": range_component_width(
+                    word_numeric_range.group("start_day")
+                ),
+                "start_month_width": range_component_width(
+                    word_numeric_range.group("start_month")
+                ),
+                "start_year_width": len(start_year_token),
+                "start_sep1": word_numeric_range.group("start_sep1"),
+                "start_sep2": word_numeric_range.group("start_sep2"),
+                "end_day_width": range_component_width(
+                    word_numeric_range.group("end_day")
+                ),
+                "end_month_width": range_component_width(
+                    word_numeric_range.group("end_month")
+                ),
+                "end_year_width": len(end_year_token),
+                "end_sep1": word_numeric_range.group("end_sep1"),
+                "end_sep2": word_numeric_range.group("end_sep2"),
+                "range_sep": word_numeric_range.group("range_sep"),
             },
         )
 
@@ -838,6 +1036,8 @@ def render_shifted_date(
 
     leading = str(parsed.style.get("leading_ws", ""))
     trailing = str(parsed.style.get("trailing_ws", ""))
+    terminal_punctuation = str(parsed.style.get("terminal_punctuation", ""))
+    rendered = f"{rendered}{terminal_punctuation}"
     return f"{leading}{rendered}{trailing}" if leading or trailing else rendered
 
 
@@ -845,7 +1045,7 @@ def render_exact_date(shifted: date, parsed: ParsedDate) -> str:
     style = parsed.style
     year_width = int(style["year_width"])
     day = render_int(shifted.day, int(style["day_width"]))
-    year = render_year(shifted.year, year_width)
+    year = f"{style.get('year_prefix', '')}{render_year(shifted.year, year_width)}"
 
     if style["kind"] == "numeric":
         month = render_int(shifted.month, int(style["month_width"]))
@@ -1076,6 +1276,11 @@ def render_date_range(
     shifted_end: date,
     style: dict[str, str | int | bool],
 ) -> str:
+    if style["kind"] == "word_numeric_range":
+        start_value = render_word_numeric_range_date(shifted_start, style, "start")
+        end_value = render_word_numeric_range_date(shifted_end, style, "end")
+        return f"{start_value}{style['range_sep']}{end_value}"
+
     if style["kind"] == "numeric_range":
         start_value = render_numeric_range_date(
             shifted_start,
@@ -1095,6 +1300,20 @@ def render_date_range(
         return render_numeric_shared_month_range(shifted_start, shifted_end, style)
 
     return render_textual_shared_month_range(shifted_start, shifted_end, style)
+
+
+def render_word_numeric_range_date(
+    value: date,
+    style: dict[str, str | int | bool],
+    side: str,
+) -> str:
+    day = render_int(value.day, int(style[f"{side}_day_width"]))
+    month = render_int(value.month, int(style[f"{side}_month_width"]))
+    year = render_year(value.year, int(style[f"{side}_year_width"]))
+    return (
+        f"{day}{style[f'{side}_sep1']}{month}"
+        f"{style[f'{side}_sep2']}{year}"
+    )
 
 
 def render_numeric_shared_month_range(
@@ -1235,6 +1454,263 @@ def render_year_like_interval(
     return f"{prefix}{style.get('prefix_sep', ' ')}{rendered}"
 
 
+def render_birthdate_age_interval(
+    shifted_start: date,
+    shifted_end: date,
+    shifted_document_date: date,
+) -> str | None:
+    start_age = render_birthdate_age(shifted_start, shifted_document_date)
+    end_age = render_birthdate_age(shifted_end, shifted_document_date)
+    if start_age is None or end_age is None:
+        return None
+    if start_age == end_age:
+        return start_age
+    return f"{start_age}/{end_age}"
+
+
+def render_birthdate_age(birthdate: date, reference_date: date) -> str | None:
+    parts = age_band_parts(birthdate, reference_date)
+    if parts is None:
+        return None
+    rendered = ", ".join(AGE_PART_TEXT[unit](value) for value, unit in parts)
+    return f"{rendered} oud"
+
+
+def age_band_parts(
+    birthdate: date,
+    reference_date: date,
+) -> tuple[tuple[int, str], ...] | None:
+    """Return the age as ``(value, unit)`` parts at the band granularity.
+
+    The bands are the single source of truth for age precision: they are used
+    both for birthdate spans and for age expressions that are already written
+    as a duration in the source text.
+    """
+    if birthdate > reference_date:
+        return None
+
+    total_days = (reference_date - birthdate).days
+    years, months, days = age_calendar_parts(birthdate, reference_date)
+    total_months = years * 12 + months
+
+    if total_days <= 28:
+        return ((total_days, "day"),)
+    if total_days <= 90:
+        weeks, remaining_days = divmod(total_days, 7)
+        if remaining_days == 0:
+            return ((weeks, "week"),)
+        return ((weeks, "week"), (remaining_days, "day"))
+    if total_months < 6:
+        weeks = days // 7
+        if weeks == 0:
+            return ((total_months, "month"),)
+        return ((total_months, "month"), (weeks, "week"))
+    if total_months < 24:
+        return ((total_months, "month"),)
+    if years < 12:
+        if months == 0:
+            return ((years, "year"),)
+        return ((years, "year"), (months, "month"))
+    return ((years, "year"),)
+
+
+def age_calendar_parts(birthdate: date, reference_date: date) -> tuple[int, int, int]:
+    years = reference_date.year - birthdate.year
+    if (reference_date.month, reference_date.day) < (birthdate.month, birthdate.day):
+        years -= 1
+
+    anniversary = add_years_clamped(birthdate, years)
+    months = 0
+    while add_months_clamped(anniversary, months + 1) <= reference_date:
+        months += 1
+
+    month_anniversary = add_months_clamped(anniversary, months)
+    days = (reference_date - month_anniversary).days
+    return years, months, days
+
+
+def add_years_clamped(value: date, years: int) -> date:
+    year = value.year + years
+    day = min(value.day, calendar.monthrange(year, value.month)[1])
+    return date(year, value.month, day)
+
+
+def add_months_clamped(value: date, months: int) -> date:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def years_text(value: int) -> str:
+    return f"{value} jaar"
+
+
+def months_text(value: int) -> str:
+    unit = "maand" if value == 1 else "maanden"
+    return f"{value} {unit}"
+
+
+def weeks_text(value: int) -> str:
+    unit = "week" if value == 1 else "weken"
+    return f"{value} {unit}"
+
+
+def days_text(value: int) -> str:
+    unit = "dag" if value == 1 else "dagen"
+    return f"{value} {unit}"
+
+
+AGE_PART_TEXT = {
+    "year": years_text,
+    "month": months_text,
+    "week": weeks_text,
+    "day": days_text,
+}
+
+
+@dataclass(frozen=True)
+class AgeExpression:
+    """An age already written as a duration in the source text."""
+
+    source: str
+    parts: tuple[tuple[float, str], ...]
+    tokens: dict[str, str]
+    lang: str
+    adjectival: bool
+    suffix: str
+    approximation_prefix: str
+
+
+def parse_age_expression(text: str) -> AgeExpression | None:
+    """Parse ``18 weken``/``6-jarig``/``7 jaar 7 maand`` into its parts.
+
+    Returns ``None`` when the text is not an age duration, which lets the
+    caller fall through to birthdate parsing.
+    """
+    body = text.strip()
+    if not body:
+        return None
+
+    approximation_prefix = ""
+    approximation_match = AGE_APPROX_PREFIX_RE.match(body)
+    if approximation_match:
+        approximation_prefix = approximation_match.group(0)
+        body = body[approximation_match.end() :]
+
+    suffix = ""
+    suffix_match = AGE_SUFFIX_RE.search(body)
+    if suffix_match:
+        suffix = body[suffix_match.start() :]
+        body = body[: suffix_match.start()]
+
+    parts: list[tuple[float, str]] = []
+    tokens: dict[str, str] = {}
+    lang = "nl"
+    adjectival = False
+    position = 0
+
+    for match in AGE_PART_RE.finditer(body):
+        if body[position : match.start()].strip(" \t,"):
+            return None
+        unit_token = match.group("unit").casefold()
+        alias = AGE_UNIT_ALIASES.get(unit_token)
+        if alias is None:
+            return None
+        unit, token_lang = alias
+        fraction = match.group("fraction")
+        value = float(f"{match.group('value')}.{fraction}" if fraction else match.group("value"))
+        parts.append((value, unit))
+        tokens.setdefault(unit, match.group("unit"))
+        if token_lang == "en":
+            lang = "en"
+        if unit_token in AGE_ADJECTIVAL_TOKENS:
+            adjectival = True
+        position = match.end()
+
+    if not parts or body[position:].strip(" \t,"):
+        return None
+
+    return AgeExpression(
+        source=text,
+        parts=tuple(parts),
+        tokens=tokens,
+        lang=lang,
+        adjectival=adjectival,
+        suffix=suffix,
+        approximation_prefix=approximation_prefix,
+    )
+
+
+def render_age_expression(
+    expression: AgeExpression,
+    reference_date: date,
+) -> str | None:
+    """Re-render an age expression at the band granularity.
+
+    The value and unit follow the same bands as birthdate-derived ages, so the
+    same real age reads the same whether the source wrote a birthdate or an
+    age. The source phrasing is kept: text that already matches its band is
+    returned untouched, and adjectival forms stay adjectival.
+    """
+    birthdate = age_expression_birthdate(expression, reference_date)
+    parts = age_band_parts(birthdate, reference_date)
+    if parts is None:
+        return None
+    if tuple((float(value), unit) for value, unit in parts) == expression.parts:
+        return expression.source
+    return (
+        f"{expression.approximation_prefix}"
+        f"{format_age_parts(parts, expression)}{expression.suffix}"
+    )
+
+
+def age_expression_birthdate(
+    expression: AgeExpression,
+    reference_date: date,
+) -> date:
+    """Anchor an age duration to a birthdate, counting back from the reference."""
+    years = 0
+    months = 0
+    days = 0
+    for value, unit in expression.parts:
+        whole = int(value)
+        fraction = value - whole
+        if unit == "year":
+            years += whole
+            days += round(fraction * 365.25)
+        elif unit == "month":
+            months += whole
+            days += round(fraction * 30.44)
+        elif unit == "week":
+            days += whole * 7 + round(fraction * 7)
+        else:
+            days += whole + round(fraction)
+
+    anchored = add_years_clamped(reference_date, -years)
+    anchored = add_months_clamped(anchored, -months)
+    return anchored - timedelta(days=days)
+
+
+def format_age_parts(
+    parts: tuple[tuple[int, str], ...],
+    expression: AgeExpression,
+) -> str:
+    if expression.adjectival and len(parts) == 1 and parts[0][1] == "year":
+        token = expression.tokens.get("year", "jarige")
+        return f"{parts[0][0]}-{token}"
+
+    rendered = []
+    for value, unit in parts:
+        token = expression.tokens.get(unit)
+        if token is None or token.casefold() not in AGE_UNIT_ABBREVIATIONS:
+            singular, plural = AGE_UNIT_WORDS[expression.lang][unit]
+            token = singular if value == 1 else plural
+        rendered.append(f"{value} {token}")
+    return ", ".join(rendered)
+
+
 def pseudonymize_standalone_age_birthdate(
     text: str,
     *,
@@ -1265,30 +1741,11 @@ def pseudonymize_standalone_age_birthdate(
         return render_year_interval(shifted_start.year, shifted_end.year)
 
     if context_kind in {"maand", "month"}:
-        if not 1 <= value <= 12:
-            return None
-        shifted_start = date(REFERENCE_YEAR_FOR_YEARLESS_DATES, value, 1) + timedelta(
-            days=date_shift_days
-        )
-        shifted_end = end_of_month(
-            REFERENCE_YEAR_FOR_YEARLESS_DATES,
-            value,
-        ) + timedelta(days=date_shift_days)
-        return render_numeric_component_interval(
-            shifted_start.month,
-            shifted_end.month,
-            range_component_width(token),
-        )
+        return "Age_Birthdate" if 1 <= value <= 12 else None
 
     if not 1 <= value <= 31:
         return None
-    try:
-        shifted = date(REFERENCE_YEAR_FOR_YEARLESS_DATES, 1, value) + timedelta(
-            days=date_shift_days
-        )
-    except ValueError:
-        return None
-    return render_int(shifted.day, range_component_width(token))
+    return "Age_Birthdate"
 
 
 def pseudonymize_standalone_date_component(
@@ -1305,6 +1762,15 @@ def pseudonymize_standalone_date_component(
 
     value = int(match.group("age"))
     token = match.group("age")
+    birthdate_component = nearest_birthdate_component_context(
+        context_before,
+        context_after,
+    )
+    if birthdate_component in {"month", "maand"}:
+        return "Age_Birthdate" if 1 <= value <= 12 else None
+    if birthdate_component in {"day", "dag"}:
+        return "Age_Birthdate" if 1 <= value <= 31 else None
+
     context_kind = nearest_age_birthdate_context(context_before, context_after)
     if context_kind in {"year", "jaar"}:
         year = expand_year(token, document_date=document_date) if value < 100 else value
@@ -1358,6 +1824,24 @@ def nearest_age_birthdate_context(
         )
     for match in AGE_BIRTHDATE_CONTEXT_RE.finditer(after):
         matches.append((match.start(), age_birthdate_context_kind(match.group(0))))
+
+    if not matches:
+        return None
+    return min(matches, key=lambda item: item[0])[1]
+
+
+def nearest_birthdate_component_context(
+    context_before: str,
+    context_after: str,
+) -> str | None:
+    matches: list[tuple[int, str]] = []
+    before = context_before[-50:]
+    after = context_after[:50]
+
+    for match in BIRTHDATE_COMPONENT_CONTEXT_RE.finditer(before):
+        matches.append((len(before) - match.end(), match.group("component").casefold()))
+    for match in BIRTHDATE_COMPONENT_CONTEXT_RE.finditer(after):
+        matches.append((match.start(), match.group("component").casefold()))
 
     if not matches:
         return None

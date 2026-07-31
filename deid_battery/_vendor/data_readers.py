@@ -5,8 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from deid_schema.normalize import normalize_span
 
-REQUIRED_ANNOTATION_FIELDS = ("begin", "end", "label", "Category", "Subtype", "text")
+
+REQUIRED_ANNOTATION_FIELDS = ("begin", "end", "label", "category", "subtype", "text")
 
 
 @dataclass(frozen=True)
@@ -473,7 +475,7 @@ def normalize_annotations(
             )
             continue
 
-        fixed = dict(annotation)
+        fixed = normalize_span(annotation)
         _coerce_required_fields(fixed)
         issues.extend(
             _validate_annotation(
@@ -499,17 +501,9 @@ def _iter_jsonl(path: Path):
 
 
 def _coerce_required_fields(annotation: dict[str, Any]) -> None:
-    if "label" not in annotation or not _clean_label_part(annotation.get("label")):
-        category = _clean_label_part(annotation.get("Category"))
-        subtype = _clean_label_part(annotation.get("Subtype"))
-        annotation["label"] = _compose_label(category, subtype)
-
-    if "Category" not in annotation or "Subtype" not in annotation:
-        category, subtype = _split_label(str(annotation.get("label", "")))
-        annotation.setdefault("Category", category)
-        annotation.setdefault("Subtype", subtype)
-
-    for field in ("label", "Category", "Subtype"):
+    # label/category/subtype are already canonicalized upstream via normalize_span;
+    # just clean them and coerce offsets/text.
+    for field in ("label", "category", "subtype"):
         annotation[field] = _clean_label_part(annotation.get(field))
     annotation["text"] = str(annotation.get("text", ""))
 
@@ -543,8 +537,8 @@ def _validate_annotation(
         "begin": int,
         "end": int,
         "label": str,
-        "Category": str,
-        "Subtype": str,
+        "category": str,
+        "subtype": str,
         "text": str,
     }
     for field, expected_type in expected_types.items():
@@ -560,8 +554,8 @@ def _validate_annotation(
                 )
             )
 
-    category = annotation.get("Category")
-    subtype = annotation.get("Subtype")
+    category = annotation.get("category")
+    subtype = annotation.get("subtype")
     label = annotation.get("label")
     if isinstance(category, str) and isinstance(subtype, str) and isinstance(label, str):
         expected_label = _compose_label(category, subtype)
