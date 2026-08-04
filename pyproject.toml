@@ -30,6 +30,7 @@ packages = [
     "deid_battery",
     "deid_battery.runners",
     "deid_battery._vendor",
+    "deid_battery._vendor.evaluation",
     "deid_battery._vendor.post_process",
 ]
 include-package-data = true

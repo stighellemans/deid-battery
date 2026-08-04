@@ -186,11 +186,20 @@ redaction rate split into machine-only and boundary-overflow redactions, scored 
 `deid-eval-annotator` gold bundle (`reference_items.jsonl`). The evaluator and
 plot are vendored under `deid_battery/_vendor/` so the package is self-contained.
 
-The vendored post-processor also carries date and birthdate pseudonymization
-(shifted dates, `Age_Birthdate` age text), but the battery never passes
-`date_shift_days`, so that path stays inactive here and spans keep their generic
-placeholders. See `post-process/README.md` for the age-rendering bands if you
-enable it.
+In addition to model-detection metrics, a normal battery run evaluates the
+shared date/age pseudonymization layer on gold `Date` and `Age_Birthdate` spans.
+This measures transformation validity, transformation types, and failure
+reasons; it does not repeat model accuracy. Its privacy-safe aggregates are
+written to `out/pseudonymization/export/`.
+
+Regenerate only that additional evidence, without running any models:
+
+```bash
+bash scripts/evaluate_pseudonymization.sh
+```
+
+The standalone command and the normal battery run use the same
+`evaluate.pseudonymization` settings in `configs/battery.yaml`.
 
 ## Running on a CPU VM
 

@@ -39,6 +39,23 @@ The benchmark input can be built from the validated synthetic source with
 `python -m deid_battery.inputs --config configs/battery.yaml`. The `adapter`
 block is used only by the latter and does not affect an existing `input.jsonl`.
 
+## Pseudonymization evidence
+
+A normal battery evaluation also generates aggregate evidence for the shared
+date/age substitution layer under `out/pseudonymization/export/`. It evaluates
+gold `Date` and `Age_Birthdate` spans, so its transformation-validity results
+are intentionally separate from the per-model detection results.
+
+Run only this inexpensive evaluation when model outputs do not need to be
+regenerated:
+
+```bash
+bash scripts/evaluate_pseudonymization.sh
+```
+
+This standalone entry point reads the same input, gold bundle, output directory,
+and `evaluate.pseudonymization` settings from `configs/battery.yaml`.
+
 ## Device behavior
 
 - `device: cpu` is the portable, reproducible default. `--device mps` and

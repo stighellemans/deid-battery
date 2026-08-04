@@ -359,6 +359,12 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
             except Exception as e:  # noqa: BLE001
                 print(f"  [{name}] skipped: {type(e).__name__}: {str(e)[:120]}")
 
+        # Extra, model-independent evidence for the shared substitution layer.
+        # This is part of a normal battery run but also has a standalone entry
+        # point (`python -m deid_battery.pseudonymization_eval`).
+        from .pseudonymization_eval import run as run_pseudonymization_eval
+        run_pseudonymization_eval(cfg, base_dir=Path.cwd())
+
 
 def main():
     ap = argparse.ArgumentParser(description="Run the deid-battery.")

@@ -138,3 +138,13 @@ evaluate:
   ignore_categories: [formatting, additional_info, medical_info, time, title]
   plot: core_pii_recall_non_pii_redaction.png
   plot_time_vs_recall: time_vs_recall.png
+  # Extra evidence about the shared substitution layer. This deliberately uses
+  # gold Date/Age_Birthdate spans, so it measures transformation validity rather
+  # than repeating model detection accuracy. A normal battery run generates it;
+  # scripts/evaluate_pseudonymization.sh can regenerate it independently.
+  pseudonymization:
+    enabled: true
+    output_dir: pseudonymization
+    document_creation_date: "2025-01-15"
+    date_shift_days: 371
+    birthdate_replacement_mode: age
