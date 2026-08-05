@@ -119,6 +119,29 @@ def test_canonical_qwen_keeps_validated_hospital_settings():
     }
 
 
+def test_canonical_uza_keeps_explicit_entity_labels():
+    config = yaml.safe_load((ROOT / "configs/battery.yaml").read_text())
+    params = _model(config, "uza")["params"]
+
+    assert "train_metrics" not in params
+    assert params["entity_labels"] == [
+        "Address_Location:Caregiver",
+        "Address_Location:Other",
+        "Address_Location:Patient",
+        "Age_Birthdate",
+        "Contactdetails",
+        "Date",
+        "ID:Caregiver",
+        "ID:Patient",
+        "Name:Caregiver",
+        "Name:Other",
+        "Name:Patient",
+        "Organization:Healthcare",
+        "Organization:Other",
+        "Profession",
+    ]
+
+
 def test_hospital_deidentify_keeps_established_runtime_and_memory_guards():
     config = yaml.safe_load((ROOT / "configs/battery.yaml").read_text())
     deidentify = _model(config, "deidentify")

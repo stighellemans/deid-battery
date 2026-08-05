@@ -80,8 +80,8 @@ and `evaluate.pseudonymization` settings from `configs/battery.yaml`.
   checkpoint. The runners translate these names to Hugging Face's `revision`
   argument internally.
 - Both RobBERT checkpoints have 14-label heads; the retired subtype slot was
-  removed. UZA loads its ordered labels from the co-located `train_metrics.json`;
-  the synthetic model keeps the same order explicitly in the config.
+  removed. Their ordered labels are specified explicitly in the config and are
+  not loaded from training metrics.
 - `postprocess.inception` requires JVM-based INCEpTION token normalization and
   therefore remains disabled in the standard run.
 - `evaluate.bundle` must cover exactly the same document IDs as `input`.

@@ -67,9 +67,7 @@ deid-battery/
 │   ├── manifest.json
 │   └── reference_items.jsonl
 └── models/
-    ├── uza/
-    │   ├── model.pt
-    │   └── train_metrics.json
+    ├── uza/model.pt
     └── synthetic/best.pt
 ```
 
