@@ -127,6 +127,10 @@ def check(
             checkpoint = _resolve(str(params["checkpoint"]))
             if not checkpoint.is_file():
                 errors.append(f"missing checkpoint for {model['id']}: {checkpoint}")
+        if params.get("train_metrics"):
+            train_metrics = _resolve(str(params["train_metrics"]))
+            if not train_metrics.is_file():
+                errors.append(f"missing train metrics for {model['id']}: {train_metrics}")
         if model.get("venv"):
             python = _resolve(str(model["venv"])) / "bin" / "python"
             if not python.is_file():

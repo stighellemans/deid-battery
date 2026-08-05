@@ -54,27 +54,11 @@ models:
     runner: robbert
     params:
       checkpoint: models/uza/model.pt
+      train_metrics: models/uza/train_metrics.json
       base_model: DTAI-KULeuven/robbert-2023-dutch-base
       base_model_commit: 1164b2df6d3ceb1735900c839da8de9bad1a99f9
       max_length: 512
       overlap: 64
-      entity_labels:
-        [
-          Address_Location:Caregiver,
-          Address_Location:Other,
-          Address_Location:Patient,
-          Age_Birthdate,
-          Contactdetails,
-          Date,
-          ID:Caregiver,
-          ID:Patient,
-          Name:Caregiver,
-          Name:Other,
-          Name:Patient,
-          Organization:Healthcare,
-          Organization:Other,
-          Profession,
-        ]
   - id: synthetic
     runner: robbert
     params:

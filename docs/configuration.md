@@ -79,9 +79,9 @@ and `evaluate.pseudonymization` settings from `configs/battery.yaml`.
   snapshot. `base_model_commit` pins the base encoder used by a local RobBERT
   checkpoint. The runners translate these names to Hugging Face's `revision`
   argument internally.
-- The synthetic checkpoint has a 14-label head; the retired subtype slot was
-  removed. Its explicit `entity_labels` order must remain aligned with the
-  checkpoint.
+- Both RobBERT checkpoints have 14-label heads; the retired subtype slot was
+  removed. UZA loads its ordered labels from the co-located `train_metrics.json`;
+  the synthetic model keeps the same order explicitly in the config.
 - `postprocess.inception` requires JVM-based INCEpTION token normalization and
   therefore remains disabled in the standard run.
 - `evaluate.bundle` must cover exactly the same document IDs as `input`.
@@ -103,7 +103,9 @@ environment on amd64 Linux. The established hospital path is
 ## Qwen
 
 The hospital endpoint is loopback-only at `http://127.0.0.1:11500/v1`, serving
-`qwen3:8b-q4_K_M`. The validated generation settings are temperature `0.6`,
-top-p `0.95`, thinking enabled, 8,000 output tokens, and two workers. Local
-Ollama commonly uses `http://127.0.0.1:11434/v1` and model name `qwen3:8b`;
-override those at runtime rather than editing or copying the canonical YAML.
+the API model tag `qwen3:8b`. Before each benchmark run, manually verify that
+the model behind that tag uses `Q4_K_M` quantization; the tag alone does not
+prove the quantization. The validated generation settings are temperature
+`0.6`, top-p `0.95`, thinking enabled, 8,000 output tokens, and two workers.
+Local Ollama commonly uses `http://127.0.0.1:11434/v1`; override the endpoint
+at runtime rather than editing or copying the canonical YAML.

@@ -109,7 +109,7 @@ def test_canonical_qwen_keeps_validated_hospital_settings():
     assert qwen["device_label"] == "gpu"
     assert qwen["params"] == {
         "base_url": "http://127.0.0.1:11500/v1",
-        "model": "qwen3:8b-q4_K_M",
+        "model": "qwen3:8b",
         "prompt_dir": "prompts",
         "temperature": 0.6,
         "top_p": 0.95,
@@ -166,3 +166,50 @@ def test_full_preflight_checks_locked_artifact_hash(tmp_path):
         allow_dirty=True,
         model_lock_path=model_lock,
     ) == []
+
+
+def test_full_preflight_rejects_missing_train_metrics(tmp_path):
+    artifact = tmp_path / "model.pt"
+    artifact.write_bytes(b"validated model")
+    model_lock = tmp_path / "models.sha256"
+    model_lock.write_text(
+        f"{hashlib.sha256(artifact.read_bytes()).hexdigest()}  {artifact}\n",
+        encoding="utf-8",
+    )
+    input_path = tmp_path / "input.jsonl"
+    input_path.write_text("{}\n", encoding="utf-8")
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "manifest.json").write_text("{}", encoding="utf-8")
+    (bundle / "reference_items.jsonl").write_text("{}\n", encoding="utf-8")
+    missing_metrics = tmp_path / "train_metrics.json"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "input": str(input_path),
+                "evaluate": {"bundle": str(bundle)},
+                "models": [
+                    {
+                        "id": "uza",
+                        "runner": "robbert",
+                        "params": {
+                            "checkpoint": str(artifact),
+                            "train_metrics": str(missing_metrics),
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    errors = check(
+        config_path,
+        _lock(tmp_path),
+        code_only=False,
+        allow_dirty=True,
+        model_lock_path=model_lock,
+    )
+
+    assert errors == [f"missing train metrics for uza: {missing_metrics}"]

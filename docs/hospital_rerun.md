@@ -67,7 +67,9 @@ deid-battery/
 │   ├── manifest.json
 │   └── reference_items.jsonl
 └── models/
-    ├── uza/model.pt
+    ├── uza/
+    │   ├── model.pt
+    │   └── train_metrics.json
     └── synthetic/best.pt
 ```
 
@@ -79,16 +81,18 @@ synthetic checkpoint hashes after copying:
 sha256sum -c deployment/hospital-models.sha256
 ```
 
-The expected synthetic artifact is the selected 14-label v2.2 checkpoint
-produced as `open-deid/models/selection/best.pt` (SHA-256
-`2f3601625462fccdad833707f7e10787fad6f180eeee93b3cb2ec22bdee97bee`).
+The expected synthetic artifact is the final full-train 14-label v2.2 refit
+produced as `open-deid/models/synthetic/best.pt` (SHA-256
+`c2e3278eee0ef4bf1c17dd6d56615f457fe2310e6965b354db10206226e378a5`).
 Use the established OpenAI-compatible Qwen GPU service on the same approved
 hospital host: `http://127.0.0.1:11500/v1`, serving the model name
-`qwen3:8b-q4_K_M`. Confirm that `/v1/models` reports that name before the smoke
-run. The committed config deliberately refuses an external LLM hostname during
-preflight. Its generation settings match the local synthetic benchmark:
-temperature `0.6`, top-p `0.95`, thinking enabled, 8,000 output tokens, and two
-workers.
+`qwen3:8b`. Confirm that `/v1/models` reports that tag. On the host that owns
+the Ollama model, also run `ollama show qwen3:8b` and manually verify that its
+quantization is `Q4_K_M` before the smoke or full run. The model tag does not
+prove which quantization is loaded. The committed config deliberately refuses
+an external LLM hostname during preflight. Its generation settings match the
+local synthetic benchmark: temperature `0.6`, top-p `0.95`, thinking enabled,
+8,000 output tokens, and two workers.
 
 ## 4. Validate before processing PHI
 
@@ -150,6 +154,7 @@ inside the approved environment. Retain these alongside the run record:
 - `git rev-parse HEAD` for `deid-battery`;
 - `deployment/hospital-source-lock.json`;
 - the three Python lock files;
-- the Qwen service/model identifier (`qwen3:8b-q4_K_M`);
+- the Qwen service/model tag (`qwen3:8b`) and the recorded manual verification
+  that its quantization was `Q4_K_M`;
 - the final config and preflight output;
 - hardware details and `timings.yaml`.
