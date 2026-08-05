@@ -44,6 +44,10 @@ SOURCE_ORDER = [
 
 NON_PII_REDACTION_RATE_LABEL = "Non-PII redaction rate"
 MISSED_LABEL = "(missed)"
+HEATMAP_CMAP = mcolors.LinearSegmentedColormap.from_list(
+    "deid_accessible_red_green",
+    ["#CC3311", "#F5F1E6", "#009E73"],
+)
 
 
 def source_display_name(annotation_id: str) -> str:
@@ -1049,7 +1053,7 @@ def plot_recall_heatmap(
     fig_height = max(5, 0.42 * len(matrix.index) + 1.5)
     fig, ax = plt.subplots(figsize=(fig_width, fig_height), constrained_layout=True)
 
-    cmap = plt.get_cmap("RdYlGn").copy()
+    cmap = HEATMAP_CMAP.copy()
     cmap.set_bad(color="#f2f2f2")
     image = ax.imshow(matrix.to_numpy(dtype=float), aspect="auto", vmin=0, vmax=1, cmap=cmap)
 
@@ -1068,7 +1072,7 @@ def plot_recall_heatmap(
             value = matrix.loc[row_name, source]
             if pd.isna(value):
                 continue
-            text_color = "white" if value >= 0.78 or value <= 0.18 else "#222222"
+            text_color = "white" if _relative_luminance(cmap(float(value))) < 0.179 else "#111111"
             ax.text(col_index, row_index, f"{value:.2f}", ha="center", va="center", color=text_color, fontsize=8)
 
     colorbar = fig.colorbar(image, ax=ax, fraction=0.035, pad=0.02)
@@ -1097,7 +1101,7 @@ def plot_annotation_confusion_heatmap(
     fig_height = max(5, 0.46 * len(fraction_matrix.index) + 1.7)
     fig, ax = plt.subplots(figsize=(fig_width, fig_height), constrained_layout=True)
 
-    cmap = plt.get_cmap("Blues").copy()
+    cmap = HEATMAP_CMAP.copy()
     cmap.set_bad(color="#f2f2f2")
     image = ax.imshow(fraction_matrix.to_numpy(dtype=float), aspect="auto", vmin=0, vmax=1, cmap=cmap)
 
@@ -1119,7 +1123,7 @@ def plot_annotation_confusion_heatmap(
             chars = int(count_matrix.loc[row_name, prediction_label])
             if pd.isna(value) or chars == 0:
                 continue
-            text_color = "white" if value >= 0.55 else "#222222"
+            text_color = "white" if _relative_luminance(cmap(float(value))) < 0.179 else "#111111"
             ax.text(
                 col_index,
                 row_index,
@@ -1237,7 +1241,7 @@ def plot_label_aware_detection_heatmap(
     fig_height = max(5.2, 0.5 * len(gold_labels) + 1.7)
     fig, ax = plt.subplots(figsize=(fig_width, fig_height), constrained_layout=True)
 
-    cmap = plt.get_cmap("RdYlGn")
+    cmap = HEATMAP_CMAP
     norm = mcolors.Normalize(vmin=0, vmax=1)
     row_lookup = {
         (row["annotation_label"], row["source"]): row
@@ -1371,7 +1375,7 @@ def plot_non_pii_redaction_label_distribution(
     fig_height = max(4.5, 0.48 * len(matrix.index) + 1.6)
     fig, ax = plt.subplots(figsize=(fig_width, fig_height), constrained_layout=True)
 
-    cmap = plt.get_cmap("Blues").copy()
+    cmap = HEATMAP_CMAP.copy()
     cmap.set_bad(color="#f2f2f2")
     image = ax.imshow(matrix.to_numpy(dtype=float), aspect="auto", vmin=0, vmax=1, cmap=cmap)
 
@@ -1390,7 +1394,7 @@ def plot_non_pii_redaction_label_distribution(
             value = matrix.loc[row_name, source]
             if pd.isna(value):
                 continue
-            text_color = "white" if value >= 0.55 else "#222222"
+            text_color = "white" if _relative_luminance(cmap(float(value))) < 0.179 else "#111111"
             ax.text(col_index, row_index, f"{value * 100:.1f}%", ha="center", va="center", color=text_color, fontsize=8)
 
     colorbar = fig.colorbar(image, ax=ax, fraction=0.035, pad=0.02)
