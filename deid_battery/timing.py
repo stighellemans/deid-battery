@@ -1,19 +1,28 @@
-"""Per-method run-time store for the time-vs-recall plot.
+"""Per-method phase-timing store for the time-vs-recall plot.
 
 A single, human-editable YAML file (path from ``timings:`` in the battery config,
 default ``timings.yaml`` at the repo root) maps each model id to a list of timing
 entries::
 
     uza:
-      - {device: cpu, seconds: 240.1, source: measured, n_docs: 300}
+      - device: cpu
+        seconds: 210.4
+        source: measured
+        timing_scope: warm_end_to_end
+        setup_seconds: 29.7
+        warmup_seconds: 0.8
+        inference_seconds: 205.1
+        postprocess_seconds: 4.6
+        cold_end_to_end_seconds: 240.1
+        n_docs: 300
       - {device: gpu, seconds: 18.0, source: manual, note: "RTX 4090"}
     deduce:
       - {device: cpu, seconds: 12.3, source: measured, n_docs: 300}
 
-- ``measured`` rows are written by the orchestrator after each successful
-  inference -- one per device (``cpu``/``gpu``), set to that pass's wall-clock
-  (re-running overwrites it). A crash-then-resume records only the completing
-  session's time; re-run from scratch for an exact number, or hand-edit the row.
+- ``measured`` rows are written after inference and shared post-processing. The
+  primary ``seconds`` value is warm end-to-end time: resident inference, raw
+  output, post-processing, and final output. Setup, warm-up, cold end-to-end, and
+  the complete measured invocation are retained as separate fields.
 - ``manual`` rows are added by hand -- e.g. the same method timed on a GPU
   elsewhere -- and are NEVER touched by the orchestrator. This is how one method
   gets both a CPU and a GPU dot in the plot. A row is auto-managed ONLY if it
@@ -35,6 +44,20 @@ import yaml
 # Anything else (e.g. a custom "a100" label on a manual row) is kept verbatim and
 # gets its own colour in the plot.
 _GPU_ALIASES = {"cuda", "gpu", "mps", "metal", "rocm", "xpu"}
+_MEASURED_DETAIL_FIELDS = {
+    "setup_seconds",
+    "warmup_seconds",
+    "warmup_documents",
+    "inference_seconds",
+    "raw_write_seconds",
+    "postprocess_seconds",
+    "cold_overhead_seconds",
+    "warm_end_to_end_seconds",
+    "cold_end_to_end_seconds",
+    "measured_full_run_seconds",
+    "timing_scope",
+    "service_setup",
+}
 
 
 def normalize_device(value: object) -> str:
@@ -96,8 +119,58 @@ def measured_seconds(entries: list[dict]) -> float | None:
     return None
 
 
+def measured_value(entries: list[dict], key: str) -> object | None:
+    """Return one field from the first auto-measured row."""
+    for entry in entries or []:
+        if is_measured(entry) and entry.get(key) is not None:
+            return entry[key]
+    return None
+
+
+def compose_phase_metrics(
+    runner_seconds: float,
+    raw_write_seconds: float,
+    postprocess_seconds: float,
+    runner_report: dict | None,
+) -> dict:
+    """Combine internal runner phases with orchestration and output phases."""
+    report = dict(runner_report or {})
+    if report:
+        setup = max(0.0, float(report.get("setup_seconds", 0.0)))
+        warmup = max(0.0, float(report.get("warmup_seconds", 0.0)))
+        inference = max(0.0, float(report.get("inference_seconds", 0.0)))
+        cold_overhead = max(0.0, float(runner_seconds) - setup - warmup - inference)
+        service_setup = str(report.get("service_setup", "local_measured"))
+        warmup_documents = max(0, int(report.get("warmup_documents", 0)))
+    else:
+        setup = warmup = cold_overhead = 0.0
+        inference = max(0.0, float(runner_seconds))
+        service_setup = "not_applicable"
+        warmup_documents = 0
+
+    raw_write = max(0.0, float(raw_write_seconds))
+    postprocess = max(0.0, float(postprocess_seconds))
+    warm_end_to_end = inference + raw_write + postprocess
+    cold_end_to_end = setup + cold_overhead + warm_end_to_end
+    measured_full = float(runner_seconds) + raw_write + postprocess
+    return {
+        "setup_seconds": setup,
+        "warmup_seconds": warmup,
+        "warmup_documents": warmup_documents,
+        "inference_seconds": inference,
+        "raw_write_seconds": raw_write,
+        "postprocess_seconds": postprocess,
+        "cold_overhead_seconds": cold_overhead,
+        "warm_end_to_end_seconds": warm_end_to_end,
+        "cold_end_to_end_seconds": cold_end_to_end,
+        "measured_full_run_seconds": measured_full,
+        "timing_scope": "warm_end_to_end",
+        "service_setup": service_setup,
+    }
+
+
 def record_measured(path: str | Path, model_id: str, device: str, seconds: float,
-                    n_docs: int | None = None) -> None:
+                    n_docs: int | None = None, details: dict | None = None) -> None:
     """Upsert the auto-``measured`` row for ``(model_id, device)`` to this pass's
     wall-clock (replace if it exists, else append).
 
@@ -106,24 +179,34 @@ def record_measured(path: str | Path, model_id: str, device: str, seconds: float
     devices are preserved verbatim -- so running on CPU never disturbs a hand-added
     GPU time, and vice versa.
 
-    Called only after a *successful* full inference, so ``seconds`` is the time of
-    the pass that produced the current raw.jsonl. A crash-then-resume records only
-    the completing session's time (an undercount vs. one clean pass) -- re-run from
-    scratch for an exact number, or hand-edit the row."""
+    Called only after successful inference and post-processing. A crash-then-resume
+    still undercounts processing phases; re-run from scratch for exact numbers."""
     device = normalize_device(device)
     seconds = round(float(seconds), 2)
     data = load(path)
     rows = data.setdefault(str(model_id), [])
+    target = None
     for r in rows:
         if is_measured(r) and normalize_device(r.get("device")) == device:
-            r["device"] = device
-            r["seconds"] = seconds
-            if n_docs is not None:
-                r["n_docs"] = int(n_docs)
+            target = r
             break
     else:
-        row: dict[str, object] = {"device": device, "seconds": seconds, "source": "measured"}
-        if n_docs is not None:
-            row["n_docs"] = int(n_docs)
-        rows.append(row)
+        target = {"source": "measured"}
+        rows.append(target)
+
+    target["device"] = device
+    target["seconds"] = seconds
+    if n_docs is not None:
+        target["n_docs"] = int(n_docs)
+    for key in _MEASURED_DETAIL_FIELDS:
+        target.pop(key, None)
+    for key, value in (details or {}).items():
+        if key not in _MEASURED_DETAIL_FIELDS or value is None:
+            continue
+        if key.endswith("_seconds"):
+            target[key] = round(float(value), 2)
+        elif key == "warmup_documents":
+            target[key] = int(value)
+        else:
+            target[key] = value
     save(path, data)

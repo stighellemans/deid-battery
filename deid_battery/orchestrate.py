@@ -28,8 +28,9 @@ import yaml
 from . import metadata as md_mod
 from . import timing as timing_mod
 from .inputs import load_input
-from .postprocess import post_process
+from .postprocess import post_process, prepare as prepare_postprocess
 from .runners import get_runner, uses_metadata_at_inference
+from .runners.phase_timing import read_report
 from .schema import read_by_doc, write_by_doc
 
 _PKG_PARENT = str(Path(__file__).resolve().parents[1])
@@ -142,7 +143,8 @@ def _runtime_config(cfg, *, exclude=None, input_path=None, output_dir=None,
 
 def run(config_path, only=None, skip_existing=False, no_run=False, device=None, batch_size=None,
         exclude=None, input_path=None, output_dir=None, evaluation_bundle=None, timings=None,
-        llm_base_url=None, llm_model=None, llm_device_label=None, deidentify_venv=None):
+        llm_base_url=None, llm_model=None, llm_device_label=None, deidentify_venv=None,
+        warmup_docs=None):
     cfg = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
     cfg = _runtime_config(
         cfg,
@@ -171,10 +173,18 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
 
     device = device or cfg.get("device")  # CLI --device overrides the config's device
     pp_cfg = cfg.get("postprocess", {"enabled": True})
+    for condition in conditions:
+        prepare_postprocess({**pp_cfg, **(condition["postprocess"] or {})})
     texts = {d["doc_id"]: d["text"] for d in docs}
     only = set(only) if only else None
     if multi:
         print(f"conditions: {', '.join(c['id'] for c in conditions)}", flush=True)
+    primary_timing_cid = next(
+        (c["id"] for c in conditions
+         if (c["metadata"] or {}).get("source", "none") != "none"),
+        conditions[0]["id"],
+    )
+    phase_runs = {}
 
     # --- Stage 1: inference -> raw (the expensive step; gated by flags). Raw is
     # shared across conditions, EXCEPT metadata-at-inference runners (deduce),
@@ -201,6 +211,8 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
                 params["device"] = device
             if batch_size is not None and "batch_size" not in params:
                 params["batch_size"] = batch_size  # CLI --batch-size (neural runners; ignored by rule-based)
+            if warmup_docs is not None and "warmup_docs" not in params:
+                params["warmup_docs"] = warmup_docs
             params["_label"] = tag  # progress-bar label (see deid_battery.progress.track)
             # Per-document checkpoint: the expensive runners (deidentify, llm) append
             # each finished doc here and resume from it after an interruption. It is
@@ -210,24 +222,31 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
             ckpt_p = raw_p.with_name(f"{raw_p.stem}.partial{raw_p.suffix}")
             raw_p.parent.mkdir(parents=True, exist_ok=True)
             params["_checkpoint"] = str(ckpt_p.resolve())
+            timing_p = raw_p.with_name(f"runner_timing{_suffix(cid) if per_cond else ''}.json")
+            timing_p.unlink(missing_ok=True)
+            params["_timing_path"] = str(timing_p.resolve())
             metas = metas_by_cond[cid] if sensitive else None  # raw is meta-neutral otherwise
             print(f"[{tag}] running ({runner})...", flush=True)
             t0 = time.perf_counter()
             try:
                 rdocs = _docs_with_meta(docs, metas)
+                runner_started = time.perf_counter()
                 if m.get("venv"):
                     by = _run_in_venv(m["venv"], runner, params, rdocs, out)
                 else:
                     by = get_runner(runner)(rdocs, params)
+                runner_seconds = time.perf_counter() - runner_started
+                raw_write_started = time.perf_counter()
                 write_by_doc(raw_p, by)
                 ckpt_p.unlink(missing_ok=True)  # raw.jsonl now supersedes the partial
+                raw_write_seconds = time.perf_counter() - raw_write_started
                 elapsed = time.perf_counter() - t0
-                # Record wall-clock under the model id (device auto-labelled cpu/gpu).
-                # Timing is shared across conditions just like raw; for per-condition
-                # runners (deduce) the last condition's time wins -- negligibly different.
-                timing_mod.record_measured(
-                    timings_path, mid, timing_mod.measured_device(m, params),
-                    elapsed, n_docs=len(docs))
+                phase_runs[(mid, cid if per_cond else conditions[0]["id"])] = {
+                    "runner_seconds": runner_seconds,
+                    "raw_write_seconds": raw_write_seconds,
+                    "runner_report": read_report(timing_p),
+                    "device": timing_mod.measured_device(m, params),
+                }
                 print(f"[{tag}] {sum(len(v) for v in by.values())} raw spans "
                       f"in {elapsed:.1f}s -> {raw_p}", flush=True)
             except Exception as e:  # one model must not abort the whole battery (e.g. LLM endpoint down)
@@ -250,8 +269,39 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
             if not raw_p.exists():
                 continue
             cpp = {**pp_cfg, **(c["postprocess"] or {})}
+            postprocess_started = time.perf_counter()
             by = _postprocess(read_by_doc(raw_p), texts, metas_by_cond[cid], cpp)
             write_by_doc(out / mid / f"by_doc{_suffix(cid)}.jsonl", by)
+            postprocess_seconds = time.perf_counter() - postprocess_started
+
+            if cid == primary_timing_cid:
+                phase_key = (mid, cid if uses_metadata_at_inference(runner)
+                             else conditions[0]["id"])
+                phase = phase_runs.get(phase_key)
+                if phase:
+                    details = timing_mod.compose_phase_metrics(
+                        phase["runner_seconds"],
+                        phase["raw_write_seconds"],
+                        postprocess_seconds,
+                        phase["runner_report"],
+                    )
+                    timing_mod.record_measured(
+                        timings_path,
+                        mid,
+                        phase["device"],
+                        details["warm_end_to_end_seconds"],
+                        n_docs=len(docs),
+                        details=details,
+                    )
+                    print(
+                        f"[{mid}] timing: setup={details['setup_seconds']:.1f}s, "
+                        f"warmup={details['warmup_seconds']:.1f}s, "
+                        f"inference={details['inference_seconds']:.1f}s, "
+                        f"postprocess={details['postprocess_seconds']:.1f}s, "
+                        f"warm-e2e={details['warm_end_to_end_seconds']:.1f}s, "
+                        f"cold-e2e={details['cold_end_to_end_seconds']:.1f}s",
+                        flush=True,
+                    )
 
     # --- Stage 3: evaluate / plot over EVERY (model, condition) on disk -- not
     # just those run this invocation. So `--only X`, `--skip-existing`, and
@@ -319,12 +369,31 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
         (out / "quantity_payload.json").write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         summary = run_plot(payload, str(out / ev.get("plot", "core_pii_recall_non_pii_redaction.png")))
-        # Record each source's measured run time (from timings.yaml) in summary.csv too.
-        summary["measured_seconds"] = summary["annotation_id"].map(
-            lambda s: timing_mod.measured_seconds(timings.get(sid_model.get(str(s), str(s)), [])))
+        # Record the primary warm end-to-end value and its component phases in
+        # summary.csv. The fields are repeated across metadata conditions because
+        # raw inference is shared; the plot selects the with-metadata condition.
+        timing_fields = {
+            "measured_seconds": "seconds",
+            "setup_seconds": "setup_seconds",
+            "warmup_seconds": "warmup_seconds",
+            "inference_seconds": "inference_seconds",
+            "raw_write_seconds": "raw_write_seconds",
+            "postprocess_seconds": "postprocess_seconds",
+            "warm_end_to_end_seconds": "warm_end_to_end_seconds",
+            "cold_end_to_end_seconds": "cold_end_to_end_seconds",
+            "timing_scope": "timing_scope",
+            "service_setup": "service_setup",
+        }
+        for column, field in timing_fields.items():
+            summary[column] = summary["annotation_id"].map(
+                lambda s, key=field: timing_mod.measured_value(
+                    timings.get(sid_model.get(str(s), str(s)), []), key
+                )
+            )
         summary.to_csv(out / "summary.csv", index=False)
         cols = ["source", "core_pii_recall", "non_pii_redaction_rate",
-                "prediction_span_count", "measured_seconds"]
+                "prediction_span_count", "measured_seconds", "setup_seconds",
+                "cold_end_to_end_seconds"]
         print(summary[[c for c in cols if c in summary.columns]].to_string(index=False))
         print(f"\nplot -> {out / ev.get('plot', 'core_pii_recall_non_pii_redaction.png')}")
 
@@ -384,6 +453,10 @@ def main():
     ap.add_argument("--batch-size", type=int, default=None, dest="batch_size",
                     help="windows/docs per forward pass for the neural runners (default 1). "
                          ">1 pools work across docs for a fair GPU timing; verified span-identical.")
+    ap.add_argument("--warmup-docs", type=int, default=None,
+                    help="override unrecorded warm-up documents for neural runners "
+                         "(batched local default fills one batch; unbatched local 1; "
+                         "remote LLM 0)")
     ap.add_argument("--exclude", default=None,
                     help="comma-separated model ids to omit entirely (for example deidentify on macOS)")
     ap.add_argument("--input", dest="input_path", default=None,
@@ -411,7 +484,8 @@ def main():
         evaluation_bundle=a.evaluation_bundle, timings=a.timings,
         llm_base_url=a.llm_base_url, llm_model=a.llm_model,
         llm_device_label=a.llm_device_label,
-        deidentify_venv=a.deidentify_venv)
+        deidentify_venv=a.deidentify_venv,
+        warmup_docs=a.warmup_docs)
 
 
 if __name__ == "__main__":

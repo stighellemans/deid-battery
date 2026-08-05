@@ -13,6 +13,7 @@ be recovered at the post-processing stage regardless of the model.
 from __future__ import annotations
 
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 from . import metadata as md_mod
@@ -21,10 +22,22 @@ from .schema import make_span
 _VENDOR = Path(__file__).resolve().parent / "_vendor" / "post_process"
 
 
+@lru_cache(maxsize=1)
 def _load_vendor():
     sys.path.insert(0, str(_VENDOR))
     from post_process import post_process_spans, set_current_doc_id
     return post_process_spans, set_current_doc_id
+
+
+def prepare(params=None):
+    """Load optional post-processing backends outside per-model timing."""
+    params = params or {}
+    if not params.get("enabled", True):
+        return
+    if params.get("rules", True):
+        _load_vendor()
+    if params.get("inception", False):
+        from span_annotations import transform  # noqa: F401
 
 
 def canonical(spans, text):

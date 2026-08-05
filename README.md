@@ -99,7 +99,8 @@ python -m venv .venv-pf
 ## Use
 
 Detailed field rationale and machine-specific commands are in
-[docs/configuration.md](docs/configuration.md).
+[docs/configuration.md](docs/configuration.md). Timing scopes and the fair neural
+comparison are documented in [docs/timing.md](docs/timing.md).
 
 ```bash
 # 1. turn your source JSONL into battery input {doc_id, text, [metadata]}.
@@ -114,6 +115,13 @@ python -m deid_battery.orchestrate run --config configs/battery.yaml
 
 Outputs in `output_dir/`: `<model>/by_doc.jsonl` (unified spans per model),
 `summary.csv`, `quantity_payload.json`, and `core_pii_recall_non_pii_redaction.png`.
+
+Neural runners warm up non-empty documents by default (enough to fill a configured
+RobBERT/GLiNER batch; one for unbatched local runners; zero for remote LLM
+endpoints), then record model setup, warm-up, resident inference, shared
+post-processing, warm end-to-end, and cold end-to-end separately. Override the
+warm-up consistently with `--warmup-docs N`.
+
 
 ## Resuming an interrupted run
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from ..checkpoint import ordered, resume_split, track
 from ..schema import make_span
+from .phase_timing import elapsed_since, measure, warmup_docs, write_report
 
 # native label (lowercased) -> project Category. Covers openai/privacy-filter and
 # OpenMed/privacy-filter-multilingual; override via params.label_map.
@@ -125,6 +126,9 @@ def run(docs, params):
     ckpt, todo, by_doc = resume_split(docs, params)
     if not todo:  # everything already checkpointed -> don't load the model
         return ordered(docs, by_doc)
+    import time
+
+    setup_started = time.perf_counter()
     import torch
     from transformers import AutoModelForTokenClassification, AutoTokenizer
 
@@ -144,8 +148,9 @@ def run(docs, params):
     device = _device(params.get("device"))
     model.to(device)
     label_map = {k.lower(): v for k, v in (params.get("label_map") or DEFAULT_LABEL_MAP).items()}
+    setup_seconds = elapsed_since(setup_started)
 
-    for d in track(todo, params):
+    def predict_doc(d):
         text = d["text"]
         best: dict[tuple, dict] = {}
         for offset, chunk in _windows(text):
@@ -159,7 +164,25 @@ def run(docs, params):
                 key = (b, e, label)
                 if key not in best or s["score"] > best[key]["score"]:
                     best[key] = make_span(b, e, label, text[b:e], score=s["score"])
-        spans = sorted(best.values(), key=lambda s: (s["begin"], s["end"]))
-        by_doc[d["doc_id"]] = spans
-        ckpt.record(d["doc_id"], spans)
+        return sorted(best.values(), key=lambda s: (s["begin"], s["end"]))
+
+    warm_docs = warmup_docs(params, todo, default=1)
+    _, warmup_seconds = measure(
+        lambda: [predict_doc(doc) for doc in warm_docs], device=device
+    )
+
+    def infer():
+        for d in track(todo, params):
+            spans = predict_doc(d)
+            by_doc[d["doc_id"]] = spans
+            ckpt.record(d["doc_id"], spans)
+
+    _, inference_seconds = measure(infer, device=device)
+    write_report(
+        params,
+        setup_seconds=setup_seconds,
+        warmup_seconds=warmup_seconds,
+        inference_seconds=inference_seconds,
+        warmup_documents=len(warm_docs),
+    )
     return ordered(docs, by_doc)

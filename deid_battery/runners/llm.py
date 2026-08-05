@@ -39,6 +39,7 @@ import requests
 
 from ..checkpoint import Checkpoint, ordered, track
 from ..schema import make_span
+from .phase_timing import elapsed_since, measure, warmup_docs, write_report
 
 DELIM = "Originele tekst:"
 THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -174,6 +175,7 @@ def _extract(text, raw):
 
 
 def run(docs, params):
+    setup_started = time.perf_counter()
     base_url = params["base_url"].rstrip("/")
     model = params.get("model", "model")
     template, example, labels = _load_assets(params["prompt_dir"])
@@ -184,6 +186,7 @@ def run(docs, params):
     workers = params.get("workers", 2)
     thinking = params.get("thinking", True)
     reasoning = params.get("reasoning")
+    setup_seconds = elapsed_since(setup_started)
 
     def work(d):
         try:
@@ -203,20 +206,41 @@ def run(docs, params):
     if by_doc:
         print(f"  [llm] resume: {len(by_doc)}/{len(docs)} docs already done", flush=True)
 
+    warm_docs = warmup_docs(params, todo, default=0)
+
+    def run_warmup():
+        for doc in warm_docs:
+            _, _, error = work(doc)
+            if error:
+                raise RuntimeError(f"LLM warm-up failed: {error}")
+
+    _, warmup_seconds = measure(run_warmup)
     fails = []
-    if todo:
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = [ex.submit(work, d) for d in todo]
-            for fut in track(as_completed(futures), params, total=len(todo)):
-                doc_id, spans, err = fut.result()
-                spans = sorted(spans, key=lambda s: (s["begin"], s["end"]))
-                by_doc[doc_id] = spans
-                if err:
-                    fails.append((doc_id, err))
-                else:
-                    ckpt.record(doc_id, spans)
+
+    def infer():
+        if todo:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = [ex.submit(work, d) for d in todo]
+                for fut in track(as_completed(futures), params, total=len(todo)):
+                    doc_id, spans, err = fut.result()
+                    spans = sorted(spans, key=lambda s: (s["begin"], s["end"]))
+                    by_doc[doc_id] = spans
+                    if err:
+                        fails.append((doc_id, err))
+                    else:
+                        ckpt.record(doc_id, spans)
+
+    _, inference_seconds = measure(infer)
     if fails:
         print(f"  [llm] {len(fails)} docs failed; first: {fails[0]}")
     if todo and len(fails) == len(todo):  # everything attempted failed -> endpoint down; don't emit phantom spans
         raise RuntimeError(f"all {len(todo)} docs failed (endpoint unreachable?): {fails[0][1]}")
+    write_report(
+        params,
+        setup_seconds=setup_seconds,
+        warmup_seconds=warmup_seconds,
+        inference_seconds=inference_seconds,
+        warmup_documents=len(warm_docs),
+        service_setup="external_preloaded",
+    )
     return ordered(docs, by_doc)

@@ -11,9 +11,11 @@ prompt-label -> project-label map via params.label_map.
 from __future__ import annotations
 
 import re
+import time
 
 from ..checkpoint import ordered, resume_split, track
 from ..schema import make_span
+from .phase_timing import elapsed_since, measure, warmup_docs, write_report
 
 # word/punctuation tokens, ~matching GLiNER's word splitter, for token-sized windows
 _TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
@@ -68,6 +70,7 @@ def run(docs, params):
     ckpt, todo, by_doc = resume_split(docs, params)
     if not todo:  # everything already checkpointed -> don't load the model
         return ordered(docs, by_doc)
+    setup_started = time.perf_counter()
     from gliner import GLiNER
 
     load_kwargs = {}
@@ -82,7 +85,8 @@ def run(docs, params):
     model.eval()
     # GLiNER.predict_entities runs on the model's device, so moving the model is
     # enough (it tokenises + places tensors internally). Default None auto-detects.
-    model.to(_device(params.get("device")))
+    device = _device(params.get("device"))
+    model.to(device)
     threshold = params.get("threshold", 0.5)
     label_map = {k.lower(): v for k, v in (params.get("label_map") or DEFAULT_LABEL_MAP).items()}
     labels = list(label_map)
@@ -111,18 +115,22 @@ def run(docs, params):
     def _finalize(best):
         return sorted(best.values(), key=lambda s: (s["begin"], s["end"]))
 
-    if batch_size <= 1:
-        # Default path: one window per predict call. Unchanged from pre-batching.
-        for d in track(todo, params):
+    setup_seconds = elapsed_since(setup_started)
+
+    def infer_unbatched(run_docs, *, record):
+        results = {}
+        iterator = track(run_docs, params) if record else run_docs
+        for d in iterator:
             text = d["text"]
             best: dict[tuple, dict] = {}
             for offset, chunk in _windows(text, max_tokens, overlap_tokens):
                 _accumulate(best, text, offset,
                             model.predict_entities(chunk, labels, threshold=threshold))
             spans = _finalize(best)
-            by_doc[d["doc_id"]] = spans
-            ckpt.record(d["doc_id"], spans)
-        return ordered(docs, by_doc)
+            results[d["doc_id"]] = spans
+            if record:
+                ckpt.record(d["doc_id"], spans)
+        return results
 
     # Batched path (batch_size>1): pool windows ACROSS docs into GLiNER's own
     # batch_predict_entities (it pads+masks internally), so a fair GPU timing isn't
@@ -130,9 +138,9 @@ def run(docs, params):
     # the batch shape changes. Docs buffered `batch_docs` at a time, checkpointed as done.
     batch_docs = max(batch_size, int(params.get("batch_docs", 64)))
 
-    def _results():
-        for gi in range(0, len(todo), batch_docs):
-            group = todo[gi:gi + batch_docs]
+    def _results(run_docs):
+        for gi in range(0, len(run_docs), batch_docs):
+            group = run_docs[gi:gi + batch_docs]
             texts = {d["doc_id"]: d["text"] for d in group}
             best_by = {d["doc_id"]: {} for d in group}
             work = [(d["doc_id"], off, chunk) for d in group
@@ -145,7 +153,31 @@ def run(docs, params):
             for d in group:
                 yield d["doc_id"], _finalize(best_by[d["doc_id"]])
 
-    for doc_id, spans in track(_results(), params, total=len(todo)):
-        by_doc[doc_id] = spans
-        ckpt.record(doc_id, spans)
+    def infer_batched(run_docs, *, record):
+        results = {}
+        iterator = _results(run_docs)
+        if record:
+            iterator = track(iterator, params, total=len(run_docs))
+        for doc_id, spans in iterator:
+            results[doc_id] = spans
+            if record:
+                ckpt.record(doc_id, spans)
+        return results
+
+    infer = infer_unbatched if batch_size <= 1 else infer_batched
+    warm_docs = warmup_docs(params, todo, default=max(1, batch_size))
+    _, warmup_seconds = measure(
+        lambda: infer(warm_docs, record=False), device=device
+    )
+    inferred, inference_seconds = measure(
+        lambda: infer(todo, record=True), device=device
+    )
+    by_doc.update(inferred)
+    write_report(
+        params,
+        setup_seconds=setup_seconds,
+        warmup_seconds=warmup_seconds,
+        inference_seconds=inference_seconds,
+        warmup_documents=len(warm_docs),
+    )
     return ordered(docs, by_doc)

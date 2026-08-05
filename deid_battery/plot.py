@@ -42,7 +42,7 @@ def plot(payload: dict, out_path):
 def plot_time_vs_recall(payload: dict, timings: dict, out_path,
                         include_sids=None, sid_to_model=None, sid_to_label=None,
                         recall_key: str = "core_pii_recall"):
-    """Scatter of run time (x) vs core PII recall (y), one dot per timings row,
+    """Scatter of warm end-to-end time vs recall, one dot per timings row,
     coloured by device (cpu/gpu). ``include_sids`` restricts to the with-metadata
     sources; ``sid_to_model`` maps a source id (e.g. ``uza@meta``) to its model id
     (``uza``), the key under which times live in ``timings``; ``sid_to_label`` maps
@@ -77,12 +77,19 @@ def plot_time_vs_recall(payload: dict, timings: dict, out_path,
         model = sid_to_model.get(sid, sid)
         name = sid_to_label.get(sid, str(r["source"]))  # bare method name (no condition suffix)
         for e in timings.get(model, []):
+            # Never mix legacy cold-stage or scope-unknown manual measurements
+            # into the fair neural comparison. Manual values can opt in by adding
+            # `timing_scope: warm_end_to_end` to their YAML row.
+            if e.get("timing_scope") != "warm_end_to_end":
+                continue
             secs = e.get("seconds")
             if secs is None:
                 continue
             rows.append({"name": name, "seconds": float(secs),
                          "recall": float(recall), "device": normalize_device(e.get("device")),
-                         "source": "measured" if is_measured(e) else "manual"})
+                         "source": "measured" if is_measured(e) else "manual",
+                         "timing_scope": e.get("timing_scope"),
+                         "service_setup": e.get("service_setup", "unspecified")})
     if not rows:
         return None
     df = pd.DataFrame(rows)
@@ -92,7 +99,8 @@ def plot_time_vs_recall(payload: dict, timings: dict, out_path,
     csv_path = _csv_beside(out_path)
     if csv_path is not None:
         (df.rename(columns={"name": "method", "source": "timing_source"})
-           [["method", "seconds", "recall", "device", "timing_source"]]
+           [["method", "seconds", "recall", "device", "timing_source",
+             "timing_scope", "service_setup"]]
            .sort_values(["recall", "seconds"], ascending=[False, True])
            .to_csv(csv_path, index=False))
 
@@ -127,13 +135,13 @@ def plot_time_vs_recall(payload: dict, timings: dict, out_path,
     smin, smax = float(df["seconds"].min()), float(df["seconds"].max())
     if smin > 0 and smax / smin > 30:  # wide spread (deduce seconds vs LLM minutes) -> log
         ax.set_xscale("log")
-        ax.set_xlabel("Run time (seconds, log scale)")
+        ax.set_xlabel("Warm end-to-end time (seconds, log scale)")
     else:
-        ax.set_xlabel("Run time (seconds)")
+        ax.set_xlabel("Warm end-to-end time (seconds)")
     ax.set_ylim(0, 1.0)
     ax.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=0))
     ax.set_ylabel("Core PII recall (with metadata)")
-    ax.set_title("Run Time vs. Recall", fontsize=18, weight="bold", pad=14)
+    ax.set_title("Warm End-to-End Time vs. Recall", fontsize=18, weight="bold", pad=14)
     ax.grid(color="#d0d0d0", linewidth=0.8)
     ax.set_axisbelow(True)
     for spine in ("top", "right"):

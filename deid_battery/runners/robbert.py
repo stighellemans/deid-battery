@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
 
 from ..checkpoint import ordered, resume_split, track
 from ..schema import make_span
+from .phase_timing import elapsed_since, measure, warmup_docs, write_report
 
 
 def _device(name):
@@ -159,6 +161,7 @@ def run(docs, params):
     ckpt, todo, by_doc = resume_split(docs, params)
     if not todo:  # everything already checkpointed -> don't load the model
         return ordered(docs, by_doc)
+    setup_started = time.perf_counter()
     import torch
     from transformers import AutoConfig, AutoModel, AutoTokenizer
 
@@ -225,18 +228,22 @@ def run(docs, params):
     bio_o = bio_labels.index("O") if "O" in bio_labels else 0
 
     batch_size = _resolved_batch_size(params.get("batch_size"), device)
+    batch_docs = max(batch_size, int(params.get("batch_docs", 64)))
+    pad_id = tok.pad_token_id if tok.pad_token_id is not None else 0
+    setup_seconds = elapsed_since(setup_started)
 
-    if batch_size <= 1:
-        # Default path: one window per forward pass. Left UNCHANGED so non-batched
-        # runs are byte-identical to before batching existed.
-        for d in track(todo, params):
+    def infer_unbatched(run_docs, *, record):
+        results = {}
+        iterator = track(run_docs, params) if record else run_docs
+        for d in iterator:
             text = d["text"]
             enc = tok(text, add_special_tokens=False, return_offsets_mapping=True, verbose=False)
             ids, offs = enc["input_ids"], [tuple(x) for x in enc["offset_mapping"]]
             n = len(ids)
             if n == 0:
-                by_doc[d["doc_id"]] = []
-                ckpt.record(d["doc_id"], [])
+                results[d["doc_id"]] = []
+                if record:
+                    ckpt.record(d["doc_id"], [])
                 continue
             bio_sum = np.zeros((n, num_bio)); ent_sum = np.zeros((n, num_ent)); cnt = np.zeros(n)
             with torch.no_grad():
@@ -254,9 +261,10 @@ def run(docs, params):
             pb = (bio_sum / cnt[:, None]).argmax(1)
             pe = (ent_sum / cnt[:, None]).argmax(1)
             spans = _decode(pb, pe, offs, text, bio_labels, ent_labels, bio_o)
-            by_doc[d["doc_id"]] = spans
-            ckpt.record(d["doc_id"], spans)
-        return ordered(docs, by_doc)
+            results[d["doc_id"]] = spans
+            if record:
+                ckpt.record(d["doc_id"], spans)
+        return results
 
     # Batched accelerator path: pad+mask `batch_size` windows -- pooled
     # ACROSS docs so short docs don't waste the GPU -- into one forward pass, then
@@ -264,11 +272,6 @@ def run(docs, params):
     # sliced off, so real-token logits (hence spans) match the per-window path; only
     # the number/size of GPU calls changes. Docs are buffered `batch_docs` at a time to
     # bound RAM, and still checkpointed per doc as each completes.
-    batch_docs = max(batch_size, int(params.get("batch_docs", 64)))
-    print(f"  [{params.get('_label') or 'robbert'}] {device.type} inference: "
-          f"batch_size={batch_size}, batch_docs={batch_docs}", file=sys.stderr, flush=True)
-    pad_id = tok.pad_token_id if tok.pad_token_id is not None else 0
-
     def _forward(packed_list):
         maxlen = max(len(p) for p in packed_list)
         inp = torch.full((len(packed_list), maxlen), pad_id, dtype=torch.long)
@@ -279,10 +282,10 @@ def run(docs, params):
             bl, ll = model(input_ids=inp.to(device), attention_mask=att.to(device))
         return bl.cpu().numpy(), ll.cpu().numpy()
 
-    def _results():
+    def _results(run_docs):
         active_batch_size = batch_size
-        for gi in range(0, len(todo), batch_docs):
-            group = todo[gi:gi + batch_docs]
+        for gi in range(0, len(run_docs), batch_docs):
+            group = run_docs[gi:gi + batch_docs]
             prepared, acc, work = [], {}, []
             for d in group:
                 enc = tok(d["text"], add_special_tokens=False, return_offsets_mapping=True, verbose=False)
@@ -323,7 +326,35 @@ def run(docs, params):
                 pe = (ent_sum / cnt[:, None]).argmax(1)
                 yield d["doc_id"], _decode(pb, pe, offs, d["text"], bio_labels, ent_labels, bio_o)
 
-    for doc_id, spans in track(_results(), params, total=len(todo)):
-        by_doc[doc_id] = spans
-        ckpt.record(doc_id, spans)
+    def infer_batched(run_docs, *, record):
+        results = {}
+        iterator = _results(run_docs)
+        if record:
+            iterator = track(iterator, params, total=len(run_docs))
+        for doc_id, spans in iterator:
+            results[doc_id] = spans
+            if record:
+                ckpt.record(doc_id, spans)
+        return results
+
+    infer = infer_unbatched if batch_size <= 1 else infer_batched
+    if batch_size > 1:
+        print(f"  [{params.get('_label') or 'robbert'}] {device.type} inference: "
+              f"batch_size={batch_size}, batch_docs={batch_docs}", file=sys.stderr, flush=True)
+
+    warm_docs = warmup_docs(params, todo, default=max(1, batch_size))
+    _, warmup_seconds = measure(
+        lambda: infer(warm_docs, record=False), device=device
+    )
+    inferred, inference_seconds = measure(
+        lambda: infer(todo, record=True), device=device
+    )
+    by_doc.update(inferred)
+    write_report(
+        params,
+        setup_seconds=setup_seconds,
+        warmup_seconds=warmup_seconds,
+        inference_seconds=inference_seconds,
+        warmup_documents=len(warm_docs),
+    )
     return ordered(docs, by_doc)

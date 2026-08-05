@@ -32,10 +32,19 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from ..checkpoint import Checkpoint, ordered, resume_split, track
 from ..schema import make_span, read_by_doc, read_jsonl, write_by_doc
+from .phase_timing import (
+    combine_reports,
+    elapsed_since,
+    measure,
+    read_report,
+    warmup_docs,
+    write_report,
+)
 
 DEFAULT_MODEL = "model_bilstmcrf_ons_large-v0.2.0"
 
@@ -103,6 +112,7 @@ def _annotate(docs, params):
     if not todo:
         return ordered(docs, by_doc)
 
+    setup_started = time.perf_counter()
     import flair
     import torch
     from deidentify.base import Document
@@ -133,8 +143,9 @@ def _annotate(docs, params):
     # cost is negligible. overlap catches boundary entities; dupes deduped downstream.
     max_chars = int(params.get("max_chars", 0) or 0)
     overlap = int(params.get("overlap", 500))
+    setup_seconds = elapsed_since(setup_started)
 
-    for d in track(todo, params):
+    def predict_doc(d):
         text = d.get("text", "")
         best: dict[tuple, dict] = {}
         if text.strip():
@@ -153,9 +164,25 @@ def _annotate(docs, params):
                     pass
                 finally:
                     _clear_pool(tagger)
-        spans = sorted(best.values(), key=lambda s: (s["begin"], s["end"]))
-        by_doc[d["doc_id"]] = spans
-        ckpt.record(d["doc_id"], spans)  # persist this doc before starting the next
+        return sorted(best.values(), key=lambda s: (s["begin"], s["end"]))
+
+    warm_docs = warmup_docs(params, todo, default=1)
+    _, warmup_seconds = measure(lambda: [predict_doc(doc) for doc in warm_docs])
+
+    def infer():
+        for d in track(todo, params):
+            spans = predict_doc(d)
+            by_doc[d["doc_id"]] = spans
+            ckpt.record(d["doc_id"], spans)  # persist this doc before starting the next
+
+    _, inference_seconds = measure(infer)
+    write_report(
+        params,
+        setup_seconds=setup_seconds,
+        warmup_seconds=warmup_seconds,
+        inference_seconds=inference_seconds,
+        warmup_documents=len(warm_docs),
+    )
     return ordered(docs, by_doc)
 
 
@@ -164,18 +191,24 @@ def _run_chunk_subprocess(chunk_docs, params):
     Reuses _worker.py with `_inproc` set so the child takes the in-process path."""
     tmp = Path(tempfile.mkdtemp(prefix="deid_chunk_"))
     try:
-        docs_p, params_p, out_p = tmp / "docs.jsonl", tmp / "params.json", tmp / "out.jsonl"
+        docs_p = tmp / "docs.jsonl"
+        params_p = tmp / "params.json"
+        out_p = tmp / "out.jsonl"
+        timing_p = tmp / "runner_timing.json"
         with open(docs_p, "w", encoding="utf-8") as f:
             for d in chunk_docs:
                 f.write(json.dumps({"doc_id": d["doc_id"], "text": d.get("text", "")},
                                    ensure_ascii=False) + "\n")
-        params_p.write_text(json.dumps({**params, "_inproc": True}), encoding="utf-8")
+        params_p.write_text(
+            json.dumps({**params, "_inproc": True, "_timing_path": str(timing_p)}),
+            encoding="utf-8",
+        )
         subprocess.run(
             [sys.executable, "-m", "deid_battery.runners._worker", "deidentify",
              str(params_p), str(docs_p), str(out_p)],
             check=True, env={**os.environ},
         )
-        return read_by_doc(out_p)
+        return read_by_doc(out_p), read_report(timing_p)
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
@@ -195,11 +228,17 @@ def run(docs, params):
     by_doc = {d["doc_id"]: ckpt.get(d["doc_id"]) for d in docs if ckpt.has(d["doc_id"])}
     if by_doc:
         print(f"[{label}] resume: {len(by_doc)}/{n} docs already done", file=sys.stderr, flush=True)
+    reports = []
     for start in range(0, n, chunk):
         sl = docs[start:start + chunk]
         if all(ckpt.has(d["doc_id"]) for d in sl):
             continue  # whole chunk already checkpointed
         print(f"[{label}] chunk {start}-{start + len(sl)}/{n}", file=sys.stderr, flush=True)
-        by_doc.update(_run_chunk_subprocess(sl, params))
+        chunk_by_doc, report = _run_chunk_subprocess(sl, params)
+        by_doc.update(chunk_by_doc)
+        reports.append(report)
+    combined = combine_reports(reports)
+    if combined:
+        write_report(params, **combined)
     # preserve input order
     return {d["doc_id"]: by_doc.get(d["doc_id"], []) for d in docs}
