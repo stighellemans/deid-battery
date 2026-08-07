@@ -46,8 +46,8 @@ SOURCE_ORDER = [
 ]
 
 NON_PII_REDACTION_RATE_LABEL = "Non-PII redaction rate"
-FALSE_POSITIVE_SPANS_LABEL = "False-positive spans"
-PII_BOUNDARY_EXTENSIONS_LABEL = "PII boundary extensions"
+FALSE_POSITIVE_SPANS_LABEL = "False positives"
+PII_BOUNDARY_EXTENSIONS_LABEL = "Boundary extensions"
 HEATMAP_CMAP = mcolors.LinearSegmentedColormap.from_list(
     "deid_accessible_red_green",
     ["#CC3311", "#F5F1E6", "#009E73"],

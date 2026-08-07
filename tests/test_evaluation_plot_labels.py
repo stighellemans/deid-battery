@@ -4,7 +4,7 @@ import pandas as pd
 from deid_battery._vendor import evaluation_plots as ep
 
 
-def test_non_pii_component_legend_uses_descriptive_labels() -> None:
+def test_non_pii_component_legend_uses_concise_labels() -> None:
     summary = pd.DataFrame(
         {
             "source": ["Example"],
@@ -19,8 +19,8 @@ def test_non_pii_component_legend_uses_descriptive_labels() -> None:
     try:
         labels = figure.axes[1].get_legend_handles_labels()[1]
         assert labels == [
-            "False-positive spans",
-            "PII boundary extensions",
+            "False positives",
+            "Boundary extensions",
         ]
     finally:
         plt.close(figure)
