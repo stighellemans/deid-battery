@@ -51,6 +51,7 @@ models:
       model: OpenMed/privacy-filter-multilingual
       model_commit: f914f18d909d541d288dfda44a4d0b6bdb638d57
   - id: uza
+    name: meddeid-dutch-uza
     runner: robbert
     params:
       checkpoint: models/uza/model.pt
@@ -76,6 +77,7 @@ models:
           Profession,
         ]
   - id: synthetic
+    name: meddeid-dutch-synth
     runner: robbert
     params:
       checkpoint: models/synthetic/best.pt
@@ -144,7 +146,7 @@ evaluate:
   # scripts/evaluate_pseudonymization.sh can regenerate it independently.
   pseudonymization:
     enabled: true
-    output_dir: pseudonymization
+    output_dir: analysis/raw/pseudonymization
     document_creation_date: "2025-01-15"
     date_shift_days: 371
     birthdate_replacement_mode: age

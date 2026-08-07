@@ -2,8 +2,8 @@
 
 Walkthrough for `deid-review-vm` (Google Cloud). The documents never leave the
 VM; everything — including the LLM — runs locally on the VM's CPU. Only the
-aggregate outputs (`summary.csv`, `core_pii_recall_non_pii_redaction.png`) contain no patient
-text and may be copied off.
+aggregate outputs in `out/analysis/raw/` and `out/analysis/plots/` contain no
+patient text and may be copied off.
 
 For a hospital upgrade, follow [hospital_rerun.md](hospital_rerun.md) instead;
 it preserves the old deployment, uses the committed source/model locks, and
@@ -91,7 +91,8 @@ endpoint is a runtime difference, so override it without copying the YAML:
 ```
 
 This runs every model → shared post-processing (with metadata) → evaluation →
-`out/core_pii_recall_non_pii_redaction.png` + `out/summary.csv`. Watch the log; each model prints
+`out/analysis/plots/core_pii_recall_non_pii_redaction.png` +
+`out/analysis/raw/summary.csv`. Watch the log; each model prints
 its span count.
 
 **Interrupted? Just re-run with `--skip-existing`.** CPU inference is slow, so a
@@ -107,14 +108,14 @@ checkpointed per document, so nothing finished is lost:
 ```
 
 Finished models are skipped; a model that was mid-flight continues from
-`out/<model>/raw.partial.jsonl` (`[deidentify] resume: 240/300 docs already done`).
+`out/runs/<model>/raw.partial.jsonl` (`[deidentify] resume: 240/300 docs already done`).
 An incomplete model is **excluded from the evaluation/plot with a warning** until
 it's finished, so a partial run never skews the scores.
 
 ## 6. Take only the aggregates off the VM, then stop it
 
 ```bash
-# summary.csv + the plot are pure scores (no patient text) -> safe to copy out
+# analysis/raw/summary.csv + analysis/plots/ are aggregate outputs -> safe to copy out
 # (e.g. via the RDP desktop, or gsutil to a results bucket)
 gcloud compute instances stop deid-review-vm --zone=europe-north1-b   # from your laptop
 ```

@@ -11,7 +11,6 @@ from typing import Any
 
 
 DEFAULT_IGNORE_CATEGORIES = ["formatting", "additional_info", "medical_info", "time", "title"]
-MULTIPLE_LABELS = "(multiple labels)"
 MISSING_LABEL = "(missing label)"
 
 DEDUCE_TO_WORKFLOW_LABEL = {
@@ -647,293 +646,209 @@ def _annotation_label_summary(annotation_label: str, group: dict[str, int]) -> d
     }
 
 
-def _empty_label_confusion() -> dict[str, Any]:
+def _coarse_label(label: Any) -> str:
+    raw_label = str(label or "").strip()
+    if not raw_label or raw_label in {MISSING_LABEL, "(missing gold label)"}:
+        return ""
+    return raw_label.split(":", maxsplit=1)[0]
+
+
+def _core_segments(
+    item: dict[str, Any], ignored_categories: set[str]
+) -> list[dict[str, Any]]:
+    """Return the disjoint character intervals that make this a core-PII span."""
+    return [
+        segment
+        for segment in item["segments"]
+        if str(segment["category"]) not in ignored_categories
+    ]
+
+
+def _prediction_core_overlap(
+    prediction: dict[str, Any], core_segments: list[dict[str, Any]]
+) -> int:
+    return sum(
+        _overlap(
+            int(prediction["begin"]),
+            int(prediction["end"]),
+            int(segment["begin"]),
+            int(segment["end"]),
+        )
+        for segment in core_segments
+    )
+
+
+def _span_label_confusion_metrics(
+    rows: list[dict[str, Any]],
+    *,
+    total_core_pii_spans: int,
+    matched_core_pii_spans: int,
+) -> dict[str, Any]:
+    exact_correct = 0
+    coarse_correct = 0
+    for row in rows:
+        gold_label = str(row.get("annotation_label") or "")
+        gold_coarse = _coarse_label(gold_label)
+        for assigned in row.get("assigned_labels") or []:
+            prediction_label = str(assigned.get("prediction_label") or "")
+            spans = int(assigned.get("spans") or 0)
+            if prediction_label == gold_label:
+                exact_correct += spans
+            if gold_coarse and _coarse_label(prediction_label) == gold_coarse:
+                coarse_correct += spans
+
+    return {
+        "definition": {
+            "matching": (
+                "Deterministic one-to-one greedy matching by descending core-PII "
+                "character overlap; ties use gold coverage, prediction coverage, "
+                "then source order. Labels never influence matching."
+            ),
+            "span_detection_recall": "matched core-PII gold spans divided by all core-PII gold spans",
+            "exact_label_accuracy_matched": "exact label match among matched core-PII spans",
+            "coarse_label_accuracy_matched": "label category before ':' matches among matched core-PII spans",
+            "exact_label_recall": "exact-label-correct matched spans divided by all core-PII gold spans",
+            "coarse_label_recall": "coarse-label-correct matched spans divided by all core-PII gold spans",
+        },
+        "exact_correct_core_pii_spans": exact_correct,
+        "coarse_correct_core_pii_spans": coarse_correct,
+        "span_detection_recall": _fraction(matched_core_pii_spans, total_core_pii_spans),
+        "exact_label_accuracy_matched": _fraction(exact_correct, matched_core_pii_spans),
+        "coarse_label_accuracy_matched": _fraction(coarse_correct, matched_core_pii_spans),
+        "exact_label_recall": _fraction(exact_correct, total_core_pii_spans),
+        "coarse_label_recall": _fraction(coarse_correct, total_core_pii_spans),
+    }
+
+
+def build_core_pii_span_label_confusion(
+    gold_items: list[dict[str, Any]],
+    predictions_by_doc: Mapping[str, list[dict[str, Any]]],
+    ignored_categories: set[str],
+) -> dict[str, Any]:
+    """Build gold-vs-predicted label confusion for one-to-one matched entities.
+
+    Any positive overlap with a gold span's non-ignored (core-PII) characters is
+    eligible.  Candidate pairs are matched greedily by geometry only, preventing
+    a prediction or gold span from contributing more than once.  This is an
+    entity-label classification view: unmatched gold spans are reported as
+    detection misses but are excluded from confusion-matrix cells.
+    """
+    gold_by_doc: dict[str, list[tuple[int, dict[str, Any], list[dict[str, Any]]]]] = defaultdict(list)
+    for global_index, item in enumerate(gold_items):
+        segments = _core_segments(item, ignored_categories)
+        if segments:
+            gold_by_doc[str(item["document_id"])].append((global_index, item, segments))
+
+    row_totals: dict[str, int] = defaultdict(int)
+    row_matched: dict[str, int] = defaultdict(int)
+    matrix: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    prediction_label_totals: dict[str, int] = defaultdict(int)
+
+    for document_id, gold_rows in gold_by_doc.items():
+        predictions = list(predictions_by_doc.get(document_id, []))
+        candidates: list[tuple[int, float, float, int, int]] = []
+        for gold_local_index, (_, item, segments) in enumerate(gold_rows):
+            gold_chars = sum(int(segment["end"]) - int(segment["begin"]) for segment in segments)
+            gold_label = _annotation_label(item.get("gold") or {}) or "(missing gold label)"
+            row_totals[gold_label] += 1
+            for prediction_index, prediction in enumerate(predictions):
+                overlap = _prediction_core_overlap(prediction, segments)
+                if overlap <= 0:
+                    continue
+                prediction_chars = int(prediction["end"]) - int(prediction["begin"])
+                candidates.append(
+                    (
+                        overlap,
+                        overlap / gold_chars,
+                        overlap / prediction_chars,
+                        gold_local_index,
+                        prediction_index,
+                    )
+                )
+
+        matched_gold: set[int] = set()
+        matched_predictions: set[int] = set()
+        for _, _, _, gold_local_index, prediction_index in sorted(
+            candidates,
+            key=lambda candidate: (
+                -candidate[0],
+                -candidate[1],
+                -candidate[2],
+                candidate[3],
+                candidate[4],
+            ),
+        ):
+            if gold_local_index in matched_gold or prediction_index in matched_predictions:
+                continue
+            matched_gold.add(gold_local_index)
+            matched_predictions.add(prediction_index)
+            _, item, _ = gold_rows[gold_local_index]
+            prediction = predictions[prediction_index]
+            gold_label = _annotation_label(item.get("gold") or {}) or "(missing gold label)"
+            prediction_label = _normalize_prediction_label(
+                prediction.get("label"),
+                source_id=prediction.get("source_id"),
+                source_name=prediction.get("source_name"),
+            )
+            row_matched[gold_label] += 1
+            matrix[gold_label][prediction_label] += 1
+            prediction_label_totals[prediction_label] += 1
+
+    rows = [
+        {
+            "annotation_label": gold_label,
+            "total_core_pii_spans": row_totals[gold_label],
+            "matched_core_pii_spans": row_matched[gold_label],
+            "missed_core_pii_spans": row_totals[gold_label] - row_matched[gold_label],
+            "span_detection_recall": _fraction(row_matched[gold_label], row_totals[gold_label]),
+            "assigned_labels": [
+                {
+                    "prediction_label": prediction_label,
+                    "spans": spans,
+                    "fraction_of_matched_row_spans": _fraction(spans, row_matched[gold_label]),
+                    "fraction_of_total_row_spans": _fraction(spans, row_totals[gold_label]),
+                }
+                for prediction_label, spans in sorted(matrix[gold_label].items())
+            ],
+        }
+        for gold_label in sorted(row_totals)
+    ]
+    total_spans = sum(row_totals.values())
+    matched_spans = sum(row_matched.values())
     return {
         "definition": (
-            "Rows are gold annotation labels by default. Columns are normalized prediction labels assigned "
-            "to detected core PII characters. Missed core PII characters are excluded from the "
-            "matrix cells and reported in row/overall missed counts. A secondary "
-            "by_subannotation_category view keeps the fine core-PII-character breakdown."
+            "Rows are gold entity-span labels and columns are normalized prediction labels. "
+            "Only one-to-one geometry-matched core-PII spans enter matrix cells; unmatched "
+            "gold spans are reported separately and excluded from label-accuracy denominators."
         ),
-        "total_core_pii_chars": 0,
-        "detected_core_pii_chars": 0,
-        "missed_core_pii_chars": 0,
-        "detected_recall": None,
-        "matrix": [],
-        "prediction_label_totals": [],
+        "matching_rule": (
+            "Positive core-PII character overlap; deterministic one-to-one greedy assignment "
+            "by overlap characters, gold coverage, prediction coverage, then stable input order."
+        ),
+        "total_core_pii_spans": total_spans,
+        "matched_core_pii_spans": matched_spans,
+        "missed_core_pii_spans": total_spans - matched_spans,
+        "span_detection_recall": _fraction(matched_spans, total_spans),
+        "metrics": _span_label_confusion_metrics(
+            rows,
+            total_core_pii_spans=total_spans,
+            matched_core_pii_spans=matched_spans,
+        ),
+        "by_annotation_label": rows,
+        "prediction_label_totals": [
+            {
+                "prediction_label": prediction_label,
+                "matched_core_pii_spans": spans,
+                "fraction_of_matched_core_pii_spans": _fraction(spans, matched_spans),
+            }
+            for prediction_label, spans in sorted(prediction_label_totals.items())
+        ],
         "normalization": {
             "deduce": "Deduce/native tags are mapped to workflow labels when possible.",
             "privacy_filter": "OpenAI Privacy Filter/OpenMed labels are mapped to coarse workflow labels when possible.",
             "fallback": "Unknown labels are kept as emitted by the prediction source.",
         },
     }
-
-
-def _prediction_labels_for_piece(
-    begin: int,
-    end: int,
-    predictions: list[dict[str, Any]],
-) -> set[str]:
-    labels: set[str] = set()
-    for prediction in predictions:
-        pred_begin = int(prediction["begin"])
-        pred_end = int(prediction["end"])
-        if pred_end <= begin:
-            continue
-        if pred_begin >= end:
-            break
-        if _overlap(begin, end, pred_begin, pred_end) == 0:
-            continue
-        labels.add(
-            _normalize_prediction_label(
-                prediction.get("label"),
-                source_id=prediction.get("source_id"),
-                source_name=prediction.get("source_name"),
-            )
-        )
-    return labels
-
-
-def _assigned_prediction_label(labels: set[str]) -> str | None:
-    if not labels:
-        return None
-    if len(labels) == 1:
-        return next(iter(labels))
-    return MULTIPLE_LABELS
-
-
-def _add_confusion_count(
-    matrix: dict[str, dict[str, int]],
-    label_totals: dict[str, int],
-    gold_category: str,
-    prediction_label: str,
-    chars: int,
-) -> None:
-    if chars <= 0:
-        return
-    matrix[gold_category][prediction_label] += chars
-    label_totals[prediction_label] += chars
-
-
-def _format_confusion_matrix(
-    row_key: str,
-    row_totals: dict[str, int],
-    row_detected: dict[str, int],
-    matrix: dict[str, dict[str, int]],
-) -> list[dict[str, Any]]:
-    return [
-        {
-            row_key: row_value,
-            "total_core_pii_chars": row_totals[row_value],
-            "detected_core_pii_chars": row_detected[row_value],
-            "missed_core_pii_chars": row_totals[row_value] - row_detected[row_value],
-            "detected_recall": None
-            if row_totals[row_value] == 0
-            else round(row_detected[row_value] / row_totals[row_value], 6),
-            "assigned_labels": [
-                {
-                    "prediction_label": prediction_label,
-                    "chars": chars,
-                    "fraction_of_detected_row_chars": None
-                    if row_detected[row_value] == 0
-                    else round(chars / row_detected[row_value], 6),
-                    "fraction_of_total_row_chars": None
-                    if row_totals[row_value] == 0
-                    else round(chars / row_totals[row_value], 6),
-                }
-                for prediction_label, chars in sorted(matrix[row_value].items())
-            ],
-        }
-        for row_value in sorted(row_totals)
-    ]
-
-
-def _coarse_label(label: Any) -> str:
-    raw_label = str(label or "").strip()
-    if not raw_label or raw_label in {MULTIPLE_LABELS, MISSING_LABEL, "(missing gold label)"}:
-        return ""
-    return raw_label.split(":", maxsplit=1)[0]
-
-
-def _mean(values: list[float]) -> float | None:
-    if not values:
-        return None
-    return round(sum(values) / len(values), 6)
-
-
-def _label_confusion_metrics(
-    annotation_matrix: list[dict[str, Any]],
-    *,
-    total_core_pii_chars: int,
-    detected_core_pii_chars: int,
-) -> dict[str, Any]:
-    exact_correct_chars = 0
-    coarse_correct_chars = 0
-    macro_exact_detected_rates: list[float] = []
-    macro_coarse_detected_rates: list[float] = []
-    macro_exact_total_rates: list[float] = []
-    macro_coarse_total_rates: list[float] = []
-
-    for row in annotation_matrix:
-        gold_label = str(row.get("annotation_label") or "")
-        gold_coarse_label = _coarse_label(gold_label)
-        row_exact_correct = 0
-        row_coarse_correct = 0
-        row_detected_chars = int(row.get("detected_core_pii_chars") or 0)
-        row_total_chars = int(row.get("total_core_pii_chars") or 0)
-
-        for assigned in row.get("assigned_labels") or []:
-            prediction_label = str(assigned.get("prediction_label") or "")
-            chars = int(assigned.get("chars") or 0)
-            if prediction_label == gold_label:
-                row_exact_correct += chars
-            if gold_coarse_label and _coarse_label(prediction_label) == gold_coarse_label:
-                row_coarse_correct += chars
-
-        exact_correct_chars += row_exact_correct
-        coarse_correct_chars += row_coarse_correct
-        if row_detected_chars > 0:
-            macro_exact_detected_rates.append(row_exact_correct / row_detected_chars)
-            macro_coarse_detected_rates.append(row_coarse_correct / row_detected_chars)
-        if row_total_chars > 0:
-            macro_exact_total_rates.append(row_exact_correct / row_total_chars)
-            macro_coarse_total_rates.append(row_coarse_correct / row_total_chars)
-
-    return {
-        "definition": {
-            "exact_label_accuracy_detected": "exact label match among detected core PII characters",
-            "coarse_label_accuracy_detected": "label category before ':' matches among detected core PII characters",
-            "exact_label_recall": "exact-label-correct detected core PII characters divided by all core PII characters",
-            "coarse_label_recall": "coarse-label-correct detected core PII characters divided by all core PII characters",
-        },
-        "exact_correct_core_pii_chars": exact_correct_chars,
-        "coarse_correct_core_pii_chars": coarse_correct_chars,
-        "exact_label_accuracy_detected": _fraction(exact_correct_chars, detected_core_pii_chars),
-        "coarse_label_accuracy_detected": _fraction(coarse_correct_chars, detected_core_pii_chars),
-        "exact_label_recall": _fraction(exact_correct_chars, total_core_pii_chars),
-        "coarse_label_recall": _fraction(coarse_correct_chars, total_core_pii_chars),
-        "macro_exact_label_accuracy_detected": _mean(macro_exact_detected_rates),
-        "macro_coarse_label_accuracy_detected": _mean(macro_coarse_detected_rates),
-        "macro_exact_label_recall": _mean(macro_exact_total_rates),
-        "macro_coarse_label_recall": _mean(macro_coarse_total_rates),
-    }
-
-
-def build_core_pii_label_confusion(
-    gold_items: list[dict[str, Any]],
-    predictions_by_doc: Mapping[str, list[dict[str, Any]]],
-    ignored_categories: set[str],
-) -> dict[str, Any]:
-    by_subannotation_category: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    subannotation_row_totals: dict[str, int] = defaultdict(int)
-    subannotation_row_detected: dict[str, int] = defaultdict(int)
-    by_annotation_label: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    annotation_row_totals: dict[str, int] = defaultdict(int)
-    annotation_row_detected: dict[str, int] = defaultdict(int)
-    prediction_label_totals: dict[str, int] = defaultdict(int)
-
-    for item in gold_items:
-        document_id = str(item["document_id"])
-        annotation_label = _annotation_label(item.get("gold") or {}) or "(missing gold label)"
-        doc_predictions = sorted(
-            predictions_by_doc.get(document_id, []),
-            key=lambda prediction: (int(prediction["begin"]), int(prediction["end"]), str(prediction.get("label", ""))),
-        )
-        if not doc_predictions:
-            for segment in item["segments"]:
-                category = str(segment["category"])
-                if category not in ignored_categories:
-                    chars = int(segment["end"]) - int(segment["begin"])
-                    subannotation_row_totals[category] += chars
-                    annotation_row_totals[annotation_label] += chars
-            continue
-
-        for segment in item["segments"]:
-            category = str(segment["category"])
-            if category in ignored_categories:
-                continue
-
-            segment_begin = int(segment["begin"])
-            segment_end = int(segment["end"])
-            segment_chars = segment_end - segment_begin
-            subannotation_row_totals[category] += segment_chars
-            annotation_row_totals[annotation_label] += segment_chars
-            boundaries = {segment_begin, segment_end}
-            for prediction in doc_predictions:
-                pred_begin = int(prediction["begin"])
-                pred_end = int(prediction["end"])
-                if pred_end <= segment_begin:
-                    continue
-                if pred_begin >= segment_end:
-                    break
-                boundaries.add(max(segment_begin, pred_begin))
-                boundaries.add(min(segment_end, pred_end))
-
-            ordered_boundaries = sorted(boundaries)
-            for begin, end in zip(ordered_boundaries, ordered_boundaries[1:]):
-                if begin >= end:
-                    continue
-                assigned_label = _assigned_prediction_label(
-                    _prediction_labels_for_piece(begin, end, doc_predictions)
-                )
-                if assigned_label is None:
-                    continue
-                chars = end - begin
-                subannotation_row_detected[category] += chars
-                annotation_row_detected[annotation_label] += chars
-                _add_confusion_count(
-                    by_subannotation_category,
-                    prediction_label_totals,
-                    category,
-                    assigned_label,
-                    chars,
-                )
-                by_annotation_label[annotation_label][assigned_label] += chars
-
-    total_core_pii = sum(subannotation_row_totals.values())
-    detected_core_pii = sum(subannotation_row_detected.values())
-    subannotation_matrix = _format_confusion_matrix(
-        "gold_category",
-        subannotation_row_totals,
-        subannotation_row_detected,
-        by_subannotation_category,
-    )
-    annotation_matrix = _format_confusion_matrix(
-        "annotation_label",
-        annotation_row_totals,
-        annotation_row_detected,
-        by_annotation_label,
-    )
-    result = _empty_label_confusion()
-    result.update(
-        {
-            "total_core_pii_chars": total_core_pii,
-            "detected_core_pii_chars": detected_core_pii,
-            "missed_core_pii_chars": total_core_pii - detected_core_pii,
-            "detected_recall": None
-            if total_core_pii == 0
-            else round(detected_core_pii / total_core_pii, 6),
-            "metrics": _label_confusion_metrics(
-                annotation_matrix,
-                total_core_pii_chars=total_core_pii,
-                detected_core_pii_chars=detected_core_pii,
-            ),
-            "matrix": annotation_matrix,
-            "by_subannotation_category": subannotation_matrix,
-            "by_annotation_label": annotation_matrix,
-            "prediction_label_totals": [
-                {
-                    "prediction_label": prediction_label,
-                    "detected_core_pii_chars": chars,
-                    "fraction_of_detected_core_pii_chars": None
-                    if detected_core_pii == 0
-                    else round(chars / detected_core_pii, 6),
-                }
-                for prediction_label, chars in sorted(prediction_label_totals.items())
-            ],
-        }
-    )
-    return result
 
 
 def _empty_redaction_bucket() -> dict[str, Any]:
@@ -1180,7 +1095,7 @@ def evaluate_quantity_deid(
         )
 
     core_pii_recall = _metric(overall["core_pii_total_chars"], overall["core_pii_covered_chars"])
-    core_pii_label_confusion = build_core_pii_label_confusion(
+    core_pii_span_label_confusion = build_core_pii_span_label_confusion(
         gold_items=gold_items,
         predictions_by_doc=predictions_by_doc,
         ignored_categories=ignored,
@@ -1197,7 +1112,7 @@ def evaluate_quantity_deid(
         },
         "gold_character_summary": gold_character_summary,
         "core_pii_recall": core_pii_recall,
-        "core_pii_label_confusion": core_pii_label_confusion,
+        "core_pii_span_label_confusion": core_pii_span_label_confusion,
         "excluded_recall": _metric(overall["excluded_total_chars"], overall["excluded_covered_chars"]),
         "overall_recall": _metric(overall["overall_total_chars"], overall["overall_covered_chars"]),
         "by_gold_category": [
@@ -1257,7 +1172,7 @@ def evaluate_predictions(
         document_lengths=document_lengths,
     )
     payload = {
-        "version": 1,
+        "version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "bundle_dir": str(bundle_path),
         "predictions_path": str(predictions_path),
@@ -1315,7 +1230,7 @@ def evaluate_all_prediction_sources(
         )
 
     payload = {
-        "version": 1,
+        "version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "bundle_dir": str(bundle_path),
         "predictions_path": str(predictions_path),
@@ -1384,7 +1299,7 @@ def _result_cli_summary(result: dict[str, Any]) -> dict[str, Any]:
         "corePiiRecall": _metric_summary(result["core_pii_recall"]),
         "excludedRecall": _metric_summary(result["excluded_recall"]),
         "overallRecall": _metric_summary(result["overall_recall"]),
-        "corePiiLabelConfusion": result["core_pii_label_confusion"],
+        "corePiiSpanLabelConfusion": result["core_pii_span_label_confusion"],
         "nonPiiRedaction": {
             "machineOnlyChars": result["non_pii_redaction_summaries"]["machine_only_redaction"]["non_pii_redacted_chars"],
             "machineOnlyRate": result["non_pii_redaction_summaries"]["machine_only_redaction"]["rate"],

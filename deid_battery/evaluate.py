@@ -1,7 +1,7 @@
-"""Char-level evaluation against a deid-eval-annotator gold bundle.
+"""Core-PII evaluation against a deid-eval-annotator gold bundle.
 
 Reuses the vendored, self-contained ``evaluate_quantity_deid`` + ``data_readers``.
-Returns the evaluation payload (core PII recall, non-PII redaction buckets, label confusion, ...)
+Returns the evaluation payload (character coverage, redaction buckets, span label confusion, ...)
 keyed per model, with display names attached.
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ def evaluate(by_doc_paths: dict[str, str], bundle_dir, document_lengths,
     import data_readers as dr
     import evaluate_quantity_deid as eq
 
-    pred_dir = Path(work_dir) / "_predictions"
+    pred_dir = Path(work_dir) / "predictions"
     if pred_dir.exists():
         shutil.rmtree(pred_dir)
     pred_dir.mkdir(parents=True, exist_ok=True)

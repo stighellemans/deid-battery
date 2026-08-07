@@ -43,7 +43,7 @@ Every measured row retains:
   the deliberately separate warm-up pass; and
 - `measured_full_run_seconds`: the literal measured invocation, including warm-up.
 
-`summary.csv` includes the most useful phase columns alongside recall.
+`out/analysis/raw/summary.csv` includes the most useful phase columns alongside recall.
 
 ## Warm-up policy
 

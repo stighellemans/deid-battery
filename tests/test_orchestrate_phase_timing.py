@@ -53,5 +53,5 @@ def test_orchestrator_records_warm_end_to_end_after_postprocessing(tmp_path, mon
     assert row["inference_seconds"] == 2.0
     assert row["seconds"] == row["warm_end_to_end_seconds"]
     assert row["cold_end_to_end_seconds"] >= row["warm_end_to_end_seconds"] + 3.0
-    assert (output_dir / "neural" / "raw.jsonl").exists()
-    assert (output_dir / "neural" / "by_doc.jsonl").exists()
+    assert (output_dir / "runs" / "neural" / "raw.jsonl").exists()
+    assert (output_dir / "runs" / "neural" / "by_doc.jsonl").exists()

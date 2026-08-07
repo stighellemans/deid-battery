@@ -85,7 +85,8 @@ def run(
     manifest = api["write_safe_export"](export_dir, rows, settings)
     if include_private_details:
         private_path = api["write_private_details"](
-            output_dir / "private" / "details.jsonl", rows
+            battery_output / "work" / "private" / "pseudonymization" / "details.jsonl",
+            rows,
         )
         print(f"private details (contains PII; do not export) -> {private_path}")
 

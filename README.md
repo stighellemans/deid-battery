@@ -113,8 +113,18 @@ python -m deid_battery.inputs --config configs/battery.yaml
 python -m deid_battery.orchestrate run --config configs/battery.yaml
 ```
 
-Outputs in `output_dir/`: `<model>/by_doc.jsonl` (unified spans per model),
-`summary.csv`, `quantity_payload.json`, and `core_pii_recall_non_pii_redaction.png`.
+Outputs in `output_dir/` use a fixed, uncluttered layout:
+
+- `runs/<model>/`: persisted raw and post-processed model spans;
+- `analysis/raw/`: machine-readable evaluation payloads and tables;
+- `analysis/plots/`: rendered figures; and
+- `work/`: disposable evaluator intermediates.
+
+The main outputs are `analysis/raw/summary.csv`,
+`analysis/raw/quantity_payload.json`, and
+`analysis/plots/core_pii_recall_non_pii_redaction.png`. Span-only label-confusion
+tables and per-source matrices live under `analysis/raw/label_confusion/` and
+`analysis/plots/label_confusion/`.
 
 Neural runners warm up non-empty documents by default (enough to fill a configured
 RobBERT/GLiNER batch; one for unbatched local runners; zero for remote LLM
@@ -138,7 +148,7 @@ mid-flight **resumes from where it stopped** — you'll see e.g.
 `[deidentify] resume: 240/300 docs already done`, and a runner whose docs are
 all done won't even load its model.
 
-How it works: each finished document is appended to `output_dir/<model>/raw.partial.jsonl`
+How it works: each finished document is appended to `output_dir/runs/<model>/raw.partial.jsonl`
 the moment it completes. On success that file is promoted to `raw.jsonl` and
 removed; if the run dies it's left in place to resume from. Failed docs (e.g. a
 dropped LLM call) are **not** checkpointed, so they retry on the next run.
@@ -198,7 +208,7 @@ In addition to model-detection metrics, a normal battery run evaluates the
 shared date/age pseudonymization layer on gold `Date` and `Age_Birthdate` spans.
 This measures transformation validity, transformation types, and failure
 reasons; it does not repeat model accuracy. Its privacy-safe aggregates are
-written to `out/pseudonymization/export/`.
+written to `out/analysis/raw/pseudonymization/export/`.
 
 Regenerate only that additional evidence, without running any models:
 

@@ -42,7 +42,7 @@ block is used only by the latter and does not affect an existing `input.jsonl`.
 ## Pseudonymization evidence
 
 A normal battery evaluation also generates aggregate evidence for the shared
-date/age substitution layer under `out/pseudonymization/export/`. It evaluates
+date/age substitution layer under `out/analysis/raw/pseudonymization/export/`. It evaluates
 gold `Date` and `Age_Birthdate` spans, so its transformation-validity results
 are intentionally separate from the per-model detection results.
 
@@ -55,6 +55,47 @@ bash scripts/evaluate_pseudonymization.sh
 
 This standalone entry point reads the same input, gold bundle, output directory,
 and `evaluate.pseudonymization` settings from `configs/battery.yaml`.
+
+## Label-assignment confusion analysis
+
+Every enabled evaluation writes label-confusion tables under
+`out/analysis/raw/label_confusion/` and the corresponding matrices under
+`out/analysis/plots/label_confusion/`. Results use deterministic one-to-one matching
+between gold core-PII entity spans and predictions with positive core-PII
+character overlap. Candidate pairs are ordered by overlap characters, gold
+coverage, prediction coverage, and then stable input order; labels never affect
+matching.
+
+Confusion cells are row-normalized among matched spans,
+so they measure label assignment rather than detection recall. Unmatched gold
+spans are reported separately in `summary.csv` and `confusion_long.csv`. The
+raw directory contains those CSV files directly, and the plots directory contains
+one rendered matrix per annotation source. All confusion cells use one
+neutral light-to-dark blue scale for percentage magnitude. The plots omit
+repeated colourbar legends and use a bold outline around diagonal exact-label
+cells to make the preferred path explicit.
+
+For consumers of `quantity_payload.json`, the label-confusion result is now only
+`core_pii_span_label_confusion`; the former character-level
+`core_pii_label_confusion` key is intentionally absent. This breaking payload
+change increments `version` from 1 to 2; regenerate cached payloads after
+upgrading.
+
+## Output layout and ordering upgrades
+
+The orchestrator migrates a legacy `out/<model>/` directory to
+`out/runs/<model>/` when the destination does not already exist. Custom scripts
+must update their aggregate paths from `out/summary.csv` and `out/<plot>.png` to
+`out/analysis/raw/summary.csv` and `out/analysis/plots/<plot>.png`. Custom
+pseudonymization configuration should use
+`output_dir: analysis/raw/pseudonymization`.
+
+Source display order follows the `models:` list, with each model's conditions in
+the order of the `conditions:` list. Reorder those lists to change report order,
+then run the orchestrator with `--no-run` to regenerate analysis from existing
+outputs. This is separate from a RobBERT model's `entity_labels:` list: that list
+is the checkpoint's load-bearing classifier index map and must never be reordered
+for presentation.
 
 ## Device behavior
 

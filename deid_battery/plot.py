@@ -41,7 +41,7 @@ def plot(payload: dict, out_path):
 
 def plot_time_vs_recall(payload: dict, timings: dict, out_path,
                         include_sids=None, sid_to_model=None, sid_to_label=None,
-                        recall_key: str = "core_pii_recall"):
+                        recall_key: str = "core_pii_recall", csv_path=None):
     """Scatter of warm end-to-end time vs recall, one dot per timings row,
     coloured by device (cpu/gpu). ``include_sids`` restricts to the with-metadata
     sources; ``sid_to_model`` maps a source id (e.g. ``uza@meta``) to its model id
@@ -96,7 +96,7 @@ def plot_time_vs_recall(payload: dict, timings: dict, out_path,
 
     # Numerical twin of the scatter: one row per plotted dot (method, its run time,
     # recall, device, and whether the time was measured or hand-added).
-    csv_path = _csv_beside(out_path)
+    csv_path = Path(csv_path) if csv_path is not None else _csv_beside(out_path)
     if csv_path is not None:
         (df.rename(columns={"name": "method", "source": "timing_source"})
            [["method", "seconds", "recall", "device", "timing_source",
@@ -167,7 +167,7 @@ def plot_time_vs_recall(payload: dict, timings: dict, out_path,
     return fig
 
 
-def plot_recall_by_gold_label(payload: dict, out_path):
+def plot_recall_by_gold_label(payload: dict, out_path, csv_path=None):
     """Core PII recall heatmap: gold label (row) x source (col)."""
     import evaluation_plots as ep
     matrix, counts = ep.build_recall_matrix(
@@ -175,7 +175,7 @@ def plot_recall_by_gold_label(payload: dict, out_path):
         metric_key="core_pii_recall", count_key="gold_span_count")
     if matrix.empty:
         return None
-    csv_path = _csv_beside(out_path)
+    csv_path = Path(csv_path) if csv_path is not None else _csv_beside(out_path)
     if csv_path is not None:
         _recall_matrix_to_frame(matrix, counts, "gold_label", "gold_span_count").to_csv(
             csv_path, index=False)
@@ -183,7 +183,7 @@ def plot_recall_by_gold_label(payload: dict, out_path):
                                   "spans", output_path=out_path)
 
 
-def plot_recall_by_subannotation_category(payload: dict, out_path):
+def plot_recall_by_subannotation_category(payload: dict, out_path, csv_path=None):
     """Recall heatmap: subannotation category (row) x source (col)."""
     import evaluation_plots as ep
     matrix, counts = ep.build_recall_matrix(
@@ -192,9 +192,16 @@ def plot_recall_by_subannotation_category(payload: dict, out_path):
         row_filter=ep._is_plottable_subannotation_category)
     if matrix.empty:
         return None
-    csv_path = _csv_beside(out_path)
+    csv_path = Path(csv_path) if csv_path is not None else _csv_beside(out_path)
     if csv_path is not None:
         _recall_matrix_to_frame(matrix, counts, "category", "total_chars").to_csv(
             csv_path, index=False)
     return ep.plot_recall_heatmap(matrix, counts, "Recall by subannotation category",
                                   "chars", output_path=out_path)
+
+
+def save_label_confusion_analysis(payload: dict, raw_dir, plots_dir=None):
+    """Write span-level label confusion data and plots."""
+    import evaluation_plots as ep
+
+    return ep.save_label_confusion_analysis(payload, raw_dir, plots_dir)

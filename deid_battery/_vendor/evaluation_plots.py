@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import shutil
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
@@ -10,13 +12,14 @@ import numpy as np
 import pandas as pd
 from matplotlib import colors as mcolors
 from matplotlib import ticker
+from matplotlib.patches import Rectangle
 
 
 SOURCE_LABELS = {
     "stig": "Annotator 1",
     "tomstroobants": "Annotator 2",
     "robert_2023_dutch_base": "RobBERT-2023 Dutch Base",
-    "open-deid-500": "Open-DEID-500",
+    "meddeid-500": "MedDeID-500",
     "med_roberta.nl": "MedRoBERTa.nl",
     "openai-pii-filter": "OpenAI PII Filter",
     "llm": "LLM",
@@ -30,7 +33,7 @@ SOURCE_ORDER = [
     "Annotator 2",
     "RobBERT-2023",
     "RobBERT-2023 Dutch Base",
-    "Open-DEID-500",
+    "MedDeID-500",
     "MedRoBERTa.nl",
     "OpenAI PII Filter",
     "OpenAI Privacy Filter",
@@ -43,10 +46,12 @@ SOURCE_ORDER = [
 ]
 
 NON_PII_REDACTION_RATE_LABEL = "Non-PII redaction rate"
-MISSED_LABEL = "(missed)"
 HEATMAP_CMAP = mcolors.LinearSegmentedColormap.from_list(
     "deid_accessible_red_green",
     ["#CC3311", "#F5F1E6", "#009E73"],
+)
+CONFUSION_CMAP = mcolors.LinearSegmentedColormap.from_list(
+    "deid_confusion_blue", ["#f5f8fa", "#b9d7e5", "#457b9d"]
 )
 
 
@@ -154,7 +159,7 @@ def build_summary_frame(payload: dict[str, Any]) -> pd.DataFrame:
     for entry in payload["results"]:
         annotation_id = entry["display_annotation_id"]
         result = entry["result"]
-        label_metrics = result.get("core_pii_label_confusion", {}).get("metrics", {})
+        label_metrics = result.get("core_pii_span_label_confusion", {}).get("metrics", {})
         machine_only_redaction = result["non_pii_redaction_summaries"]["machine_only_redaction"]["non_pii_redacted_chars"]
         boundary_overflow_redaction = result["non_pii_redaction_summaries"]["boundary_overflow_redaction"]["non_pii_redacted_chars"]
         machine_only_redaction_fraction = _non_pii_redaction_rate(result, "machine_only_redaction", machine_only_redaction)
@@ -174,8 +179,8 @@ def build_summary_frame(payload: dict[str, Any]) -> pd.DataFrame:
                 "prediction_span_count": result["summary"]["prediction_span_count"],
                 "exact_label_recall": label_metrics.get("exact_label_recall", np.nan),
                 "coarse_label_recall": label_metrics.get("coarse_label_recall", np.nan),
-                "exact_label_accuracy_detected": label_metrics.get("exact_label_accuracy_detected", np.nan),
-                "coarse_label_accuracy_detected": label_metrics.get("coarse_label_accuracy_detected", np.nan),
+                "exact_label_accuracy_matched": label_metrics.get("exact_label_accuracy_matched", np.nan),
+                "coarse_label_accuracy_matched": label_metrics.get("coarse_label_accuracy_matched", np.nan),
             }
         )
 
@@ -196,46 +201,38 @@ def build_label_quality_frame(payload: dict[str, Any]) -> pd.DataFrame:
     source_order = source_order_from_payload(payload, display_names)
     for entry in payload["results"]:
         annotation_id = str(entry["display_annotation_id"])
-        confusion = entry["result"].get("core_pii_label_confusion", {})
+        confusion = entry["result"].get("core_pii_span_label_confusion", {})
         metrics = confusion.get("metrics", {})
         rows.append(
             {
                 "annotation_id": annotation_id,
                 "source": display_names[annotation_id],
-                "total_core_pii_chars": confusion.get("total_core_pii_chars", np.nan),
-                "detected_core_pii_chars": confusion.get("detected_core_pii_chars", np.nan),
-                "missed_core_pii_chars": confusion.get("missed_core_pii_chars", np.nan),
-                "detected_recall": confusion.get("detected_recall", np.nan),
-                "exact_correct_core_pii_chars": metrics.get("exact_correct_core_pii_chars", np.nan),
-                "coarse_correct_core_pii_chars": metrics.get("coarse_correct_core_pii_chars", np.nan),
+                "total_core_pii_spans": confusion.get("total_core_pii_spans", np.nan),
+                "matched_core_pii_spans": confusion.get("matched_core_pii_spans", np.nan),
+                "missed_core_pii_spans": confusion.get("missed_core_pii_spans", np.nan),
+                "span_detection_recall": confusion.get("span_detection_recall", np.nan),
+                "exact_correct_core_pii_spans": metrics.get("exact_correct_core_pii_spans", np.nan),
+                "coarse_correct_core_pii_spans": metrics.get("coarse_correct_core_pii_spans", np.nan),
                 "exact_label_recall": metrics.get("exact_label_recall", np.nan),
                 "coarse_label_recall": metrics.get("coarse_label_recall", np.nan),
-                "exact_label_accuracy_detected": metrics.get("exact_label_accuracy_detected", np.nan),
-                "coarse_label_accuracy_detected": metrics.get("coarse_label_accuracy_detected", np.nan),
-                "macro_exact_label_recall": metrics.get("macro_exact_label_recall", np.nan),
-                "macro_coarse_label_recall": metrics.get("macro_coarse_label_recall", np.nan),
-                "macro_exact_label_accuracy_detected": metrics.get("macro_exact_label_accuracy_detected", np.nan),
-                "macro_coarse_label_accuracy_detected": metrics.get("macro_coarse_label_accuracy_detected", np.nan),
+                "exact_label_accuracy_matched": metrics.get("exact_label_accuracy_matched", np.nan),
+                "coarse_label_accuracy_matched": metrics.get("coarse_label_accuracy_matched", np.nan),
             }
         )
 
     columns = [
         "annotation_id",
         "source",
-        "total_core_pii_chars",
-        "detected_core_pii_chars",
-        "missed_core_pii_chars",
-        "detected_recall",
-        "exact_correct_core_pii_chars",
-        "coarse_correct_core_pii_chars",
+        "total_core_pii_spans",
+        "matched_core_pii_spans",
+        "missed_core_pii_spans",
+        "span_detection_recall",
+        "exact_correct_core_pii_spans",
+        "coarse_correct_core_pii_spans",
         "exact_label_recall",
         "coarse_label_recall",
-        "exact_label_accuracy_detected",
-        "coarse_label_accuracy_detected",
-        "macro_exact_label_recall",
-        "macro_coarse_label_recall",
-        "macro_exact_label_accuracy_detected",
-        "macro_coarse_label_accuracy_detected",
+        "exact_label_accuracy_matched",
+        "coarse_label_accuracy_matched",
     ]
     frame = pd.DataFrame(rows, columns=columns)
     if frame.empty:
@@ -244,57 +241,51 @@ def build_label_quality_frame(payload: dict[str, Any]) -> pd.DataFrame:
     return _with_source_order(frame, source_order)
 
 
-def build_label_confusion_frame(
-    payload: dict[str, Any],
-    *,
-    view: str = "by_annotation_label",
-) -> pd.DataFrame:
+def build_label_confusion_frame(payload: dict[str, Any]) -> pd.DataFrame:
     rows = []
     display_names = source_display_names(payload)
     source_order = source_order_from_payload(payload, display_names)
-    row_label_key = "gold_category" if view == "by_subannotation_category" else "annotation_label"
-
     for entry in payload["results"]:
         annotation_id = str(entry["display_annotation_id"])
         source = display_names[annotation_id]
-        confusion = entry["result"].get("core_pii_label_confusion", {})
-        for row in confusion.get(view, []):
-            row_label = str(row.get(row_label_key, ""))
+        confusion = entry["result"].get("core_pii_span_label_confusion", {})
+        for row in confusion.get("by_annotation_label", []):
+            row_label = str(row.get("annotation_label", ""))
             for assigned in row.get("assigned_labels") or []:
                 rows.append(
                     {
                         "annotation_id": annotation_id,
                         "source": source,
-                        row_label_key: row_label,
+                        "annotation_label": row_label,
                         "prediction_label": _display_prediction_label(assigned.get("prediction_label")),
-                        "chars": int(assigned.get("chars") or 0),
-                        "total_core_pii_chars": int(row.get("total_core_pii_chars") or 0),
-                        "detected_core_pii_chars": int(row.get("detected_core_pii_chars") or 0),
-                        "missed_core_pii_chars": int(row.get("missed_core_pii_chars") or 0),
-                        "detected_recall": row.get("detected_recall", np.nan),
-                        "fraction_of_detected_row_chars": assigned.get("fraction_of_detected_row_chars", np.nan),
-                        "fraction_of_total_row_chars": assigned.get("fraction_of_total_row_chars", np.nan),
+                        "spans": int(assigned.get("spans") or 0),
+                        "total_core_pii_spans": int(row.get("total_core_pii_spans") or 0),
+                        "matched_core_pii_spans": int(row.get("matched_core_pii_spans") or 0),
+                        "missed_core_pii_spans": int(row.get("missed_core_pii_spans") or 0),
+                        "span_detection_recall": row.get("span_detection_recall", np.nan),
+                        "fraction_of_matched_row_spans": assigned.get("fraction_of_matched_row_spans", np.nan),
+                        "fraction_of_total_row_spans": assigned.get("fraction_of_total_row_spans", np.nan),
                     }
                 )
 
     columns = [
         "annotation_id",
         "source",
-        row_label_key,
+        "annotation_label",
         "prediction_label",
-        "chars",
-        "total_core_pii_chars",
-        "detected_core_pii_chars",
-        "missed_core_pii_chars",
-        "detected_recall",
-        "fraction_of_detected_row_chars",
-        "fraction_of_total_row_chars",
+        "spans",
+        "total_core_pii_spans",
+        "matched_core_pii_spans",
+        "missed_core_pii_spans",
+        "span_detection_recall",
+        "fraction_of_matched_row_spans",
+        "fraction_of_total_row_spans",
     ]
     frame = pd.DataFrame(rows, columns=columns)
     if frame.empty:
         return frame
     frame = frame.sort_values(
-        ["source", row_label_key, "chars", "prediction_label"],
+        ["source", "annotation_label", "spans", "prediction_label"],
         ascending=[True, True, False, True],
         key=lambda values: _source_sorter(source_order)(values) if values.name == "source" else values,
     ).reset_index(drop=True)
@@ -697,11 +688,11 @@ def plot_label_quality_metrics(
         constrained_layout=True,
     )
 
-    detected_recall = df["detected_recall"].astype(float)
+    detected_recall = df["span_detection_recall"].astype(float)
     exact_recall = df["exact_label_recall"].astype(float)
     coarse_recall = df["coarse_label_recall"].astype(float)
-    exact_accuracy = df["exact_label_accuracy_detected"].astype(float)
-    coarse_accuracy = df["coarse_label_accuracy_detected"].astype(float)
+    exact_accuracy = df["exact_label_accuracy_matched"].astype(float)
+    coarse_accuracy = df["coarse_label_accuracy_matched"].astype(float)
 
     ax_recall.barh(
         y - row_height,
@@ -731,7 +722,7 @@ def plot_label_quality_metrics(
         label="Coarse",
     )
     ax_recall.set_title("Label-Correct Recall", fontsize=16, weight="bold", pad=14)
-    ax_recall.set_xlabel("Detected with correct label / all core PII characters")
+    ax_recall.set_xlabel("Matched with correct label / all core PII spans")
     ax_recall.set_yticks(y, df["source"])
 
     ax_accuracy.barh(
@@ -752,8 +743,8 @@ def plot_label_quality_metrics(
         linewidth=0.7,
         label="Coarse",
     )
-    ax_accuracy.set_title("Detected-Entity Label Accuracy", fontsize=16, weight="bold", pad=14)
-    ax_accuracy.set_xlabel("Correct label / detected core PII characters")
+    ax_accuracy.set_title("Matched-Entity Label Accuracy", fontsize=16, weight="bold", pad=14)
+    ax_accuracy.set_xlabel("Correct label / matched core PII spans")
     ax_accuracy.set_yticks(y, [])
 
     for axis in (ax_recall, ax_accuracy):
@@ -823,20 +814,22 @@ def build_label_match_matrix(
     counts: dict[str, int] = {}
     for entry in payload["results"]:
         source = display_names[str(entry["display_annotation_id"])]
-        confusion = entry["result"].get("core_pii_label_confusion", {})
+        confusion = entry["result"].get("core_pii_span_label_confusion", {})
         for row in confusion.get("by_annotation_label", []):
             gold_label = str(row.get("annotation_label") or "")
-            total_chars = int(row.get("total_core_pii_chars") or 0)
-            detected_chars = int(row.get("detected_core_pii_chars") or 0)
-            denominator_chars = detected_chars if denominator == "detected" else total_chars
-            correct_chars = 0
+            total_spans = int(row.get("total_core_pii_spans") or 0)
+            matched_spans = int(row.get("matched_core_pii_spans") or 0)
+            denominator_spans = matched_spans if denominator == "matched" else total_spans
+            correct_spans = 0
             for assigned in row.get("assigned_labels") or []:
                 prediction_label = str(assigned.get("prediction_label") or "")
-                chars = int(assigned.get("chars") or 0)
+                spans = int(assigned.get("spans") or 0)
                 if _prediction_label_matches_gold(prediction_label, gold_label, match_level):
-                    correct_chars += chars
-            values.setdefault(gold_label, {})[source] = np.nan if denominator_chars == 0 else correct_chars / denominator_chars
-            counts[gold_label] = max(counts.get(gold_label, 0), total_chars)
+                    correct_spans += spans
+            values.setdefault(gold_label, {})[source] = (
+                np.nan if denominator_spans == 0 else correct_spans / denominator_spans
+            )
+            counts[gold_label] = max(counts.get(gold_label, 0), total_spans)
 
     matrix = pd.DataFrame.from_dict(values, orient="index")
     matrix = matrix.reindex(columns=source_names)
@@ -854,33 +847,33 @@ def build_label_aware_recall_frame(payload: dict[str, Any]) -> pd.DataFrame:
     for entry in payload["results"]:
         annotation_id = str(entry["display_annotation_id"])
         source = display_names[annotation_id]
-        confusion = entry["result"].get("core_pii_label_confusion", {})
+        confusion = entry["result"].get("core_pii_span_label_confusion", {})
         metrics = confusion.get("metrics", {})
-        total_chars = int(confusion.get("total_core_pii_chars") or 0)
-        detected_chars = int(confusion.get("detected_core_pii_chars") or 0)
-        exact_chars = int(metrics.get("exact_correct_core_pii_chars") or 0)
-        coarse_chars = int(metrics.get("coarse_correct_core_pii_chars") or 0)
-        category_only_chars = max(coarse_chars - exact_chars, 0)
-        incorrect_category_chars = max(detected_chars - coarse_chars, 0)
-        missed_chars = max(total_chars - detected_chars, 0)
+        total_spans = int(confusion.get("total_core_pii_spans") or 0)
+        matched_spans = int(confusion.get("matched_core_pii_spans") or 0)
+        exact_spans = int(metrics.get("exact_correct_core_pii_spans") or 0)
+        coarse_spans = int(metrics.get("coarse_correct_core_pii_spans") or 0)
+        category_only_spans = max(coarse_spans - exact_spans, 0)
+        incorrect_category_spans = max(matched_spans - coarse_spans, 0)
+        missed_spans = max(total_spans - matched_spans, 0)
 
         rows.append(
             {
                 "annotation_id": annotation_id,
                 "source": source,
-                "total_core_pii_chars": total_chars,
-                "detected_core_pii_chars": detected_chars,
-                "exact_category_subtype_chars": exact_chars,
-                "correct_category_only_chars": category_only_chars,
-                "incorrect_category_chars": incorrect_category_chars,
-                "missed_chars": missed_chars,
-                "entity_detection_recall": _fraction_float(detected_chars, total_chars),
-                "exact_category_subtype_recall": _fraction_float(exact_chars, total_chars),
-                "correct_category_only_recall": _fraction_float(category_only_chars, total_chars),
-                "incorrect_category_recall": _fraction_float(incorrect_category_chars, total_chars),
-                "missed_fraction": _fraction_float(missed_chars, total_chars),
-                "category_accuracy_detected": _fraction_float(coarse_chars, detected_chars),
-                "exact_accuracy_detected": _fraction_float(exact_chars, detected_chars),
+                "total_core_pii_spans": total_spans,
+                "matched_core_pii_spans": matched_spans,
+                "exact_category_subtype_spans": exact_spans,
+                "correct_category_only_spans": category_only_spans,
+                "incorrect_category_spans": incorrect_category_spans,
+                "missed_spans": missed_spans,
+                "entity_detection_recall": _fraction_float(matched_spans, total_spans),
+                "exact_category_subtype_recall": _fraction_float(exact_spans, total_spans),
+                "correct_category_only_recall": _fraction_float(category_only_spans, total_spans),
+                "incorrect_category_recall": _fraction_float(incorrect_category_spans, total_spans),
+                "missed_fraction": _fraction_float(missed_spans, total_spans),
+                "category_accuracy_matched": _fraction_float(coarse_spans, matched_spans),
+                "exact_accuracy_matched": _fraction_float(exact_spans, matched_spans),
             }
         )
 
@@ -899,37 +892,37 @@ def build_label_aware_gold_label_frame(payload: dict[str, Any]) -> pd.DataFrame:
     for entry in payload["results"]:
         annotation_id = str(entry["display_annotation_id"])
         source = display_names[annotation_id]
-        confusion = entry["result"].get("core_pii_label_confusion", {})
+        confusion = entry["result"].get("core_pii_span_label_confusion", {})
         for group in confusion.get("by_annotation_label", []):
             gold_label = str(group.get("annotation_label") or "")
-            total_chars = int(group.get("total_core_pii_chars") or 0)
-            detected_chars = int(group.get("detected_core_pii_chars") or 0)
-            exact_chars = 0
-            coarse_chars = 0
+            total_spans = int(group.get("total_core_pii_spans") or 0)
+            matched_spans = int(group.get("matched_core_pii_spans") or 0)
+            exact_spans = 0
+            coarse_spans = 0
             for assigned in group.get("assigned_labels") or []:
                 prediction_label = str(assigned.get("prediction_label") or "")
-                chars = int(assigned.get("chars") or 0)
+                spans = int(assigned.get("spans") or 0)
                 if _prediction_label_matches_gold(prediction_label, gold_label, "exact"):
-                    exact_chars += chars
+                    exact_spans += spans
                 if _prediction_label_matches_gold(prediction_label, gold_label, "coarse"):
-                    coarse_chars += chars
+                    coarse_spans += spans
 
             rows.append(
                 {
                     "annotation_id": annotation_id,
                     "source": source,
                     "annotation_label": gold_label,
-                    "total_core_pii_chars": total_chars,
-                    "detected_core_pii_chars": detected_chars,
-                    "exact_category_subtype_chars": exact_chars,
-                    "correct_category_chars": coarse_chars,
-                    "incorrect_category_chars": max(detected_chars - coarse_chars, 0),
-                    "missed_chars": max(total_chars - detected_chars, 0),
-                    "entity_detection_recall": _fraction_float(detected_chars, total_chars),
-                    "exact_category_subtype_recall": _fraction_float(exact_chars, total_chars),
-                    "correct_category_recall": _fraction_float(coarse_chars, total_chars),
-                    "category_accuracy_detected": _fraction_float(coarse_chars, detected_chars),
-                    "exact_accuracy_detected": _fraction_float(exact_chars, detected_chars),
+                    "total_core_pii_spans": total_spans,
+                    "matched_core_pii_spans": matched_spans,
+                    "exact_category_subtype_spans": exact_spans,
+                    "correct_category_spans": coarse_spans,
+                    "incorrect_category_spans": max(matched_spans - coarse_spans, 0),
+                    "missed_spans": max(total_spans - matched_spans, 0),
+                    "entity_detection_recall": _fraction_float(matched_spans, total_spans),
+                    "exact_category_subtype_recall": _fraction_float(exact_spans, total_spans),
+                    "correct_category_recall": _fraction_float(coarse_spans, total_spans),
+                    "category_accuracy_matched": _fraction_float(coarse_spans, matched_spans),
+                    "exact_accuracy_matched": _fraction_float(exact_spans, matched_spans),
                 }
             )
 
@@ -941,79 +934,6 @@ def build_label_aware_gold_label_frame(payload: dict[str, Any]) -> pd.DataFrame:
         key=lambda values: _source_sorter(source_order)(values) if values.name == "source" else values,
     ).reset_index(drop=True)
     return _with_source_order(frame, source_order)
-
-
-def build_annotation_confusion_matrices(
-    payload: dict[str, Any],
-) -> dict[str, dict[str, Any]]:
-    display_names = source_display_names(payload)
-    matrices: dict[str, dict[str, Any]] = {}
-
-    for entry in payload["results"]:
-        annotation_id = str(entry["display_annotation_id"])
-        source = display_names[annotation_id]
-        confusion = entry["result"].get("core_pii_label_confusion", {})
-        rows = confusion.get("by_annotation_label", [])
-        if not rows:
-            continue
-
-        raw_values: dict[str, dict[str, int]] = {}
-        counts: dict[str, int] = {}
-        prediction_totals: Counter[str] = Counter()
-        for row in rows:
-            gold_label = str(row.get("annotation_label") or "")
-            total_chars = int(row.get("total_core_pii_chars") or 0)
-            missed_chars = int(row.get("missed_core_pii_chars") or 0)
-            counts[gold_label] = total_chars
-            raw_values.setdefault(gold_label, {})
-            if missed_chars:
-                raw_values[gold_label][MISSED_LABEL] = missed_chars
-                prediction_totals[MISSED_LABEL] += missed_chars
-            for assigned in row.get("assigned_labels") or []:
-                prediction_label = _display_prediction_label(assigned.get("prediction_label"))
-                chars = int(assigned.get("chars") or 0)
-                raw_values[gold_label][prediction_label] = raw_values[gold_label].get(prediction_label, 0) + chars
-                prediction_totals[prediction_label] += chars
-
-        if not raw_values:
-            continue
-
-        row_order = sorted(
-            raw_values,
-            key=lambda gold_label: (
-                _row_exact_match_fraction(raw_values[gold_label], gold_label, counts.get(gold_label, 0)),
-                gold_label,
-            ),
-        )
-        prediction_label_set = {label for label in prediction_totals if label != MISSED_LABEL}
-        prediction_labels = [label for label in row_order if label in prediction_label_set]
-        prediction_labels.extend(
-            sorted(
-                prediction_label_set.difference(row_order),
-                key=lambda label: (-prediction_totals[label], label),
-            )
-        )
-        if MISSED_LABEL in prediction_totals:
-            prediction_labels.append(MISSED_LABEL)
-
-        count_matrix = pd.DataFrame(0, index=row_order, columns=prediction_labels, dtype=int)
-        fraction_matrix = pd.DataFrame(np.nan, index=row_order, columns=prediction_labels, dtype=float)
-        for gold_label in row_order:
-            total_chars = counts.get(gold_label, 0)
-            for prediction_label, chars in raw_values[gold_label].items():
-                count_matrix.loc[gold_label, prediction_label] = chars
-                if total_chars > 0:
-                    fraction_matrix.loc[gold_label, prediction_label] = chars / total_chars
-
-        matrices[annotation_id] = {
-            "annotation_id": annotation_id,
-            "source": source,
-            "fraction_matrix": fraction_matrix,
-            "count_matrix": count_matrix,
-            "counts": counts,
-        }
-
-    return matrices
 
 
 def _is_plottable_subannotation_category(group: dict[str, Any]) -> bool:
@@ -1087,63 +1007,285 @@ def plot_recall_heatmap(
     return fig
 
 
-def plot_annotation_confusion_heatmap(
-    fraction_matrix: pd.DataFrame,
-    count_matrix: pd.DataFrame,
-    counts: dict[str, int],
-    title: str,
+def build_span_label_confusion_matrices(
+    payload: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Build row-normalized one-to-one span label-confusion matrices."""
+    display_names = source_display_names(payload)
+    matrices: dict[str, dict[str, Any]] = {}
+    for entry in payload["results"]:
+        annotation_id = str(entry["display_annotation_id"])
+        source = display_names[annotation_id]
+        confusion = entry["result"].get("core_pii_span_label_confusion", {})
+        rows = confusion.get("by_annotation_label", [])
+        if not rows:
+            continue
+
+        raw_values: dict[str, dict[str, int]] = {}
+        totals: dict[str, int] = {}
+        matched: dict[str, int] = {}
+        prediction_totals: Counter[str] = Counter()
+        for row in rows:
+            gold_label = str(row.get("annotation_label") or "")
+            totals[gold_label] = int(row.get("total_core_pii_spans") or 0)
+            matched[gold_label] = int(row.get("matched_core_pii_spans") or 0)
+            raw_values.setdefault(gold_label, {})
+            for assigned in row.get("assigned_labels") or []:
+                prediction_label = _display_prediction_label(assigned.get("prediction_label"))
+                value = int(assigned.get("spans") or 0)
+                if value <= 0:
+                    continue
+                raw_values[gold_label][prediction_label] = (
+                    raw_values[gold_label].get(prediction_label, 0) + value
+                )
+                prediction_totals[prediction_label] += value
+
+        row_order = sorted(raw_values)
+        prediction_labels = [label for label in row_order if label in prediction_totals]
+        prediction_labels.extend(
+            sorted(
+                set(prediction_totals).difference(row_order),
+                key=lambda label: (-prediction_totals[label], label),
+            )
+        )
+        if not prediction_labels:
+            continue
+
+        count_matrix = pd.DataFrame(0, index=row_order, columns=prediction_labels, dtype=int)
+        fraction_matrix = pd.DataFrame(np.nan, index=row_order, columns=prediction_labels, dtype=float)
+        for gold_label in row_order:
+            for prediction_label, value in raw_values[gold_label].items():
+                count_matrix.loc[gold_label, prediction_label] = value
+                fraction_matrix.loc[gold_label, prediction_label] = value / matched[gold_label]
+
+        matrices[annotation_id] = {
+            "annotation_id": annotation_id,
+            "source": source,
+            "fraction_matrix": fraction_matrix,
+            "count_matrix": count_matrix,
+            "totals": totals,
+            "matched": matched,
+            "metrics": confusion.get("metrics", {}),
+        }
+
+    return matrices
+
+
+def build_span_label_confusion_long_frame(payload: dict[str, Any]) -> pd.DataFrame:
+    matrices = build_span_label_confusion_matrices(payload)
+    rows: list[dict[str, Any]] = []
+    for matrix_payload in matrices.values():
+        counts = matrix_payload["count_matrix"]
+        for gold_label in counts.index:
+            total = int(matrix_payload["totals"][gold_label])
+            matched = int(matrix_payload["matched"][gold_label])
+            for prediction_label in counts.columns:
+                value = int(counts.loc[gold_label, prediction_label])
+                if value <= 0:
+                    continue
+                rows.append(
+                    {
+                        "annotation_id": matrix_payload["annotation_id"],
+                        "source": matrix_payload["source"],
+                        "gold_label": gold_label,
+                        "prediction_label": prediction_label,
+                        "spans": value,
+                        "total_core_pii_spans": total,
+                        "matched_core_pii_spans": matched,
+                        "missed_core_pii_spans": total - matched,
+                        "detection_recall": _fraction_float(matched, total),
+                        "fraction_of_matched_row_spans": _fraction_float(value, matched),
+                        "fraction_of_total_row_spans": _fraction_float(value, total),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def build_span_label_confusion_summary_frame(payload: dict[str, Any]) -> pd.DataFrame:
+    matrices = build_span_label_confusion_matrices(payload)
+    rows = []
+    for matrix_payload in matrices.values():
+        metrics = matrix_payload["metrics"]
+        totals = matrix_payload["totals"]
+        matched = matrix_payload["matched"]
+        total = sum(totals.values())
+        matched_total = sum(matched.values())
+        rows.append(
+            {
+                "annotation_id": matrix_payload["annotation_id"],
+                "source": matrix_payload["source"],
+                "total_core_pii_spans": total,
+                "matched_core_pii_spans": matched_total,
+                "missed_core_pii_spans": total - matched_total,
+                "detection_recall": _fraction_float(matched_total, total),
+                "exact_label_accuracy_among_matches": metrics.get("exact_label_accuracy_matched"),
+                "coarse_label_accuracy_among_matches": metrics.get("coarse_label_accuracy_matched"),
+                "exact_label_recall": metrics.get("exact_label_recall"),
+                "coarse_label_recall": metrics.get("coarse_label_recall"),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def plot_span_label_confusion_heatmap(
+    matrix_payload: dict[str, Any],
     output_path: Path | None = None,
 ):
+    fraction_matrix = matrix_payload["fraction_matrix"]
+    count_matrix = matrix_payload["count_matrix"]
     if fraction_matrix.empty:
-        raise ValueError(f"No data available for {title}")
+        raise ValueError("No matched label-confusion data available")
 
     fig_width = max(9, 0.95 * len(fraction_matrix.columns) + 4)
-    fig_height = max(5, 0.46 * len(fraction_matrix.index) + 1.7)
+    fig_height = max(5, 0.5 * len(fraction_matrix.index) + 1.8)
     fig, ax = plt.subplots(figsize=(fig_width, fig_height), constrained_layout=True)
+    values = fraction_matrix.to_numpy(dtype=float)
+    cell_colors = np.empty((*values.shape, 4), dtype=float)
+    cell_colors[:] = mcolors.to_rgba("#f2f2f2")
+    for row_index, gold_label in enumerate(fraction_matrix.index):
+        for column_index, prediction_label in enumerate(fraction_matrix.columns):
+            value = values[row_index, column_index]
+            if np.isnan(value):
+                continue
+            cell_colors[row_index, column_index] = CONFUSION_CMAP(float(value))
+    ax.imshow(cell_colors, aspect="auto")
 
-    cmap = HEATMAP_CMAP.copy()
-    cmap.set_bad(color="#f2f2f2")
-    image = ax.imshow(fraction_matrix.to_numpy(dtype=float), aspect="auto", vmin=0, vmax=1, cmap=cmap)
-
-    ax.set_title(title, fontsize=15, weight="bold", pad=14)
+    ax.set_title(
+        f"Span-level Label Confusion Among Matched Detections\n{matrix_payload['source']}",
+        fontsize=14,
+        weight="bold",
+        pad=12,
+    )
     ax.set_xlabel("Predicted label")
     ax.set_ylabel("Gold label")
     ax.set_xticks(np.arange(len(fraction_matrix.columns)), fraction_matrix.columns, rotation=35, ha="right")
-    y_labels = [f"{row} ({counts.get(row, 0):,} chars)" for row in fraction_matrix.index]
+    y_labels = [
+        f"{label} ({matrix_payload['matched'][label]:,}/{matrix_payload['totals'][label]:,} spans)"
+        for label in fraction_matrix.index
+    ]
     ax.set_yticks(np.arange(len(fraction_matrix.index)), y_labels)
-
     ax.set_xticks(np.arange(-0.5, len(fraction_matrix.columns), 1), minor=True)
     ax.set_yticks(np.arange(-0.5, len(fraction_matrix.index), 1), minor=True)
     ax.grid(which="minor", color="#d8d8d8", linewidth=0.7)
     ax.tick_params(which="minor", bottom=False, left=False)
 
-    for row_index, row_name in enumerate(fraction_matrix.index):
-        for col_index, prediction_label in enumerate(fraction_matrix.columns):
-            value = fraction_matrix.loc[row_name, prediction_label]
-            chars = int(count_matrix.loc[row_name, prediction_label])
-            if pd.isna(value) or chars == 0:
+    # The outlined cells form the preferred exact-label path. This remains
+    # unambiguous without adding colour-scale legends to every matrix.
+    prediction_positions = {
+        label: position for position, label in enumerate(fraction_matrix.columns)
+    }
+    for row_index, gold_label in enumerate(fraction_matrix.index):
+        column_index = prediction_positions.get(gold_label)
+        if column_index is None:
+            continue
+        ax.add_patch(
+            Rectangle(
+                (column_index - 0.5, row_index - 0.5),
+                1.0,
+                1.0,
+                fill=False,
+                edgecolor="#4c5963",
+                linewidth=1.35,
+                zorder=5,
+            )
+        )
+
+    for row_index, row_label in enumerate(fraction_matrix.index):
+        for column_index, prediction_label in enumerate(fraction_matrix.columns):
+            value = fraction_matrix.loc[row_label, prediction_label]
+            count = int(count_matrix.loc[row_label, prediction_label])
+            if pd.isna(value) or count == 0:
                 continue
-            text_color = "white" if _relative_luminance(cmap(float(value))) < 0.179 else "#111111"
+            text_color = (
+                "white"
+                if _relative_luminance(CONFUSION_CMAP(float(value))) < 0.179
+                else "#111111"
+            )
             ax.text(
-                col_index,
+                column_index,
                 row_index,
-                f"{value * 100:.1f}%\n{chars:,}",
+                f"{float(value) * 100:.1f}%\n{count:,}",
                 ha="center",
                 va="center",
                 color=text_color,
                 fontsize=7,
             )
 
-    colorbar = fig.colorbar(image, ax=ax, fraction=0.035, pad=0.02)
-    colorbar.set_label("Share of gold core PII characters")
-    colorbar.ax.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=0))
-
     for spine in ax.spines.values():
         spine.set_visible(False)
-
     if output_path is not None:
-        fig.savefig(output_path, dpi=200, bbox_inches="tight")
+        fig.savefig(output_path, dpi=200, bbox_inches="tight", pad_inches=0.2)
     return fig
+
+
+def save_label_confusion_analysis(
+    payload: dict[str, Any], raw_dir: Path | str, plots_dir: Path | str | None = None
+) -> dict[str, Any]:
+    """Persist span-only confusion tables and plots in separate directory trees."""
+    raw_root = Path(raw_dir)
+    split_outputs = plots_dir is not None
+    plot_root = Path(plots_dir) if split_outputs else raw_root
+    raw_root.mkdir(parents=True, exist_ok=True)
+    plot_root.mkdir(parents=True, exist_ok=True)
+    for stale_dir in {
+        raw_root / "span",
+        raw_root / "character",
+        plot_root / "span",
+        plot_root / "character",
+    }:
+        if stale_dir.is_dir():
+            shutil.rmtree(stale_dir)
+    artifacts: dict[str, Any] = {}
+    definitions = {
+        "purpose": "Label assignment among matched core-PII detections; separate from detection recall.",
+        "span_matching": (
+            "Positive overlap with non-ignored/core-PII gold characters; deterministic one-to-one "
+            "greedy assignment by overlap characters, gold coverage, prediction coverage, then stable input order."
+        ),
+        "confusion_denominator": "Matched spans within each gold-label row.",
+        "detection_denominator": "All core-PII gold spans within each gold-label row.",
+        "label_normalization": (
+            "BIO prefixes are stripped; known Deduce, OpenAI Privacy Filter, and OpenMed labels are "
+            "mapped to workflow labels; unknown labels are retained verbatim."
+        ),
+        "plot_encoding": (
+            "All cells use one neutral light-to-dark blue 0–100% magnitude scale; "
+            "a bold outline marks every preferred exact-label diagonal cell."
+        ),
+    }
+    (raw_root / "definitions.json").write_text(
+        json.dumps(definitions, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    (raw_root / "README.md").write_text(
+        "# Label confusion analysis\n\n"
+        "Confusion matrices use one-to-one span matches and are row-normalized among matched detections; "
+        "detection misses are reported in the raw tables and summaries, not as a predicted label.\n\n"
+        "- Raw tables: `summary.csv` and `confusion_long.csv` in this directory.\n"
+        "- Rendered matrices: the matching `analysis/plots/label_confusion/` directory.\n"
+        "- `definitions.json`\n",
+        encoding="utf-8",
+    )
+
+    matrix_plots_dir = plot_root if split_outputs else raw_root / "plots"
+    matrix_plots_dir.mkdir(parents=True, exist_ok=True)
+    matrices = build_span_label_confusion_matrices(payload)
+    long_frame = build_span_label_confusion_long_frame(payload)
+    summary_frame = build_span_label_confusion_summary_frame(payload)
+    long_frame.to_csv(raw_root / "confusion_long.csv", index=False)
+    summary_frame.to_csv(raw_root / "summary.csv", index=False)
+    figures = {}
+    for annotation_id, matrix_payload in matrices.items():
+        output_path = matrix_plots_dir / f"{_safe_filename(annotation_id)}.png"
+        figure = plot_span_label_confusion_heatmap(matrix_payload, output_path)
+        figures[annotation_id] = figure
+        plt.close(figure)
+    artifacts = {
+        "matrices": matrices,
+        "long_frame": long_frame,
+        "summary_frame": summary_frame,
+        "figures": figures,
+    }
+    return artifacts
 
 
 def plot_label_aware_recall_stack(
@@ -1184,7 +1326,7 @@ def plot_label_aware_recall_stack(
     ax.set_yticks(y, df["source"])
     ax.invert_yaxis()
     ax.xaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=0))
-    ax.set_xlabel("Share of all core PII characters")
+    ax.set_xlabel("Share of all core PII spans")
     ax.set_title("Label-Aware Core PII Recall", fontsize=18, weight="bold", pad=16)
     ax.grid(axis="x", color="#d0d0d0", linewidth=0.8)
     ax.set_axisbelow(True)
@@ -1227,7 +1369,7 @@ def plot_label_aware_detection_heatmap(
 
     source_names = _ordered_unique_sources(gold_label_df)
     label_counts = (
-        gold_label_df.groupby("annotation_label")["total_core_pii_chars"].max().astype(int).to_dict()
+        gold_label_df.groupby("annotation_label")["total_core_pii_spans"].max().astype(int).to_dict()
     )
     gold_labels = sorted(
         label_counts,
@@ -1267,7 +1409,7 @@ def plot_label_aware_detection_heatmap(
             if row is None:
                 continue
             detection_recall = row.get("entity_detection_recall")
-            category_accuracy = row.get("category_accuracy_detected")
+            category_accuracy = row.get("category_accuracy_matched")
             if pd.isna(detection_recall):
                 continue
 
@@ -1322,7 +1464,7 @@ def plot_label_aware_detection_heatmap(
         fraction=0.035,
         pad=0.02,
     )
-    colorbar.set_label("Label accuracy among detected chars")
+    colorbar.set_label("Label accuracy among matched spans")
     colorbar.ax.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=0))
 
     for spine in ax.spines.values():
@@ -1445,8 +1587,6 @@ def save_quantity_evaluation_plots(payload: dict[str, Any], figures_dir: Path | 
         match_level="coarse",
         denominator="total",
     )
-    annotation_confusion_matrices = build_annotation_confusion_matrices(payload)
-
     artifacts = {
         "summary_df": summary_df,
         "annotation_label_matrix": annotation_label_matrix,
@@ -1462,7 +1602,6 @@ def save_quantity_evaluation_plots(payload: dict[str, Any], figures_dir: Path | 
         "exact_label_match_matrix": exact_label_match_matrix,
         "coarse_label_match_matrix": coarse_label_match_matrix,
         "label_match_counts": label_match_counts,
-        "annotation_confusion_matrices": annotation_confusion_matrices,
         "core_pii_recall_non_pii_redaction_figure": plot_recall_and_non_pii_redaction(
             summary_df,
             figures_path / "core_pii_recall_non_pii_redaction.png",
@@ -1510,7 +1649,7 @@ def save_quantity_evaluation_plots(payload: dict[str, Any], figures_dir: Path | 
             exact_label_match_matrix,
             label_match_counts,
             title="Exact Label-Correct Recall By Gold Label",
-            count_unit="chars",
+            count_unit="spans",
             output_path=figures_path / "exact_label_recall_by_gold_label.png",
             colorbar_label="Exact label-correct recall",
         )
@@ -1521,24 +1660,15 @@ def save_quantity_evaluation_plots(payload: dict[str, Any], figures_dir: Path | 
             coarse_label_match_matrix,
             label_match_counts,
             title="Coarse Label-Correct Recall By Gold Label",
-            count_unit="chars",
+            count_unit="spans",
             output_path=figures_path / "coarse_label_recall_by_gold_label.png",
             colorbar_label="Coarse label-correct recall",
         )
     else:
         artifacts["coarse_label_match_figure"] = None
-    confusion_figures_dir = figures_path / "label_confusion_by_annotation_id"
-    confusion_figures_dir.mkdir(parents=True, exist_ok=True)
-    artifacts["annotation_confusion_figures"] = {}
-    for annotation_id, matrix_payload in annotation_confusion_matrices.items():
-        output_path = confusion_figures_dir / f"{_safe_filename(annotation_id)}.png"
-        artifacts["annotation_confusion_figures"][annotation_id] = plot_annotation_confusion_heatmap(
-            matrix_payload["fraction_matrix"],
-            matrix_payload["count_matrix"],
-            matrix_payload["counts"],
-            title=f"Label Confusion: {matrix_payload['source']}",
-            output_path=output_path,
-        )
+    artifacts["label_confusion_analysis"] = save_label_confusion_analysis(
+        payload, figures_path / "label_confusion"
+    )
     if not fp_label_matrix.empty:
         artifacts["non_pii_redaction_label_figure"] = plot_non_pii_redaction_label_distribution(
             fp_label_matrix,
@@ -1627,12 +1757,6 @@ def _prediction_label_matches_gold(prediction_label: str, gold_label: str, match
     raise ValueError(f"Unsupported match level: {match_level}")
 
 
-def _row_exact_match_fraction(row_values: dict[str, int], gold_label: str, total_chars: int) -> float:
-    if total_chars <= 0:
-        return np.nan
-    return row_values.get(gold_label, 0) / total_chars
-
-
 def _safe_filename(value: Any) -> str:
     text = str(value or "").strip()
     safe = "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in text)
@@ -1668,15 +1792,15 @@ def _annotate_grouped_percent_bars(axis, y_positions: np.ndarray, values: pd.Ser
 
 def _annotate_detected_pool(axis, y_positions: np.ndarray, frame: pd.DataFrame) -> None:
     for y, row in zip(y_positions, frame.to_dict(orient="records")):
-        detected_chars = row.get("detected_core_pii_chars")
-        total_chars = row.get("total_core_pii_chars")
-        detected_recall = row.get("detected_recall")
-        if pd.isna(detected_chars) or pd.isna(total_chars) or pd.isna(detected_recall):
+        matched_spans = row.get("matched_core_pii_spans")
+        total_spans = row.get("total_core_pii_spans")
+        detection_recall = row.get("span_detection_recall")
+        if pd.isna(matched_spans) or pd.isna(total_spans) or pd.isna(detection_recall):
             continue
         axis.text(
             1.01,
             y,
-            f"pool {int(detected_chars):,}/{int(total_chars):,} ({float(detected_recall) * 100:.1f}%)",
+            f"pool {int(matched_spans):,}/{int(total_spans):,} ({float(detection_recall) * 100:.1f}%)",
             va="center",
             ha="left",
             fontsize=8,

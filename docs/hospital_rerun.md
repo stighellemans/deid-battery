@@ -79,8 +79,8 @@ synthetic checkpoint hashes after copying:
 sha256sum -c deployment/hospital-models.sha256
 ```
 
-The expected synthetic artifact is the final full-train 14-label v2.2 refit
-produced as `open-deid/models/synthetic/best.pt` (SHA-256
+The expected synthetic artifact is the final full-train 14-label refit
+produced as `meddeid/models/synthetic/best.pt` (SHA-256
 `c2e3278eee0ef4bf1c17dd6d56615f457fe2310e6965b354db10206226e378a5`).
 Use the established OpenAI-compatible Qwen GPU service on the same approved
 hospital host: `http://127.0.0.1:11500/v1`, serving the model name
@@ -145,7 +145,8 @@ resume from outputs produced by an older code or model snapshot.
 
 ## 6. Export and retain evidence
 
-Only export aggregate, inspected artifacts such as `summary.csv` and the plots.
+Only export inspected aggregate artifacts from `out/analysis/raw/` and
+`out/analysis/plots/`.
 Per-document JSONL, logs, checkpoints, inputs, and the evaluation bundle remain
 inside the approved environment. Retain these alongside the run record:
 

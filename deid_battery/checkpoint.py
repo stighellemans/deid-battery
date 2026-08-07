@@ -9,7 +9,7 @@ literally a partial of the final output; the orchestrator writes the finished
 failure so the next run continues where it stopped.
 
 The path is injected by the orchestrator as ``params['_checkpoint']`` (a stable
-location under the model's output dir, e.g. ``out/<model>/raw.partial.jsonl``).
+location under the model's output dir, e.g. ``out/runs/<model>/raw.partial.jsonl``).
 When it is absent every operation is a no-op, so a runner behaves exactly as it
 did before checkpointing existed. Runners that don't stream per-doc simply never
 construct one.

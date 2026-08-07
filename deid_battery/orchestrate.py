@@ -93,12 +93,43 @@ def _src_id(mid, cid):
     return f"{mid}@{cid}" if cid else mid
 
 
-def _raw_path(out, mid, runner, cid):
+def _raw_path(runs_dir, mid, runner, cid):
     """A per-condition raw only for inference-metadata-sensitive runners (deduce);
     every other runner shares one condition-independent raw.jsonl."""
     if cid and uses_metadata_at_inference(runner):
-        return out / mid / f"raw{_suffix(cid)}.jsonl"
-    return out / mid / "raw.jsonl"
+        return runs_dir / mid / f"raw{_suffix(cid)}.jsonl"
+    return runs_dir / mid / "raw.jsonl"
+
+
+def _output_dirs(out: Path) -> dict[str, Path]:
+    """Return the stable, deliberately small top-level output layout."""
+    return {
+        "runs": out / "runs",
+        "work": out / "work",
+        "analysis_raw": out / "analysis" / "raw",
+        "analysis_plots": out / "analysis" / "plots",
+    }
+
+
+def _write_output_readme(out: Path) -> None:
+    (out / "README.md").write_text(
+        "# DEID battery outputs\n\n"
+        "- `runs/`: persisted raw and post-processed outputs, grouped by model.\n"
+        "- `analysis/raw/`: machine-readable evaluation payloads and tables.\n"
+        "- `analysis/plots/`: rendered evaluation figures.\n"
+        "- `work/`: disposable evaluator intermediates; safe to regenerate.\n",
+        encoding="utf-8",
+    )
+
+
+def _migrate_legacy_model_outputs(out: Path, runs_dir: Path, model_ids) -> None:
+    """Move pre-layout model folders once so upgrades never trigger costly reruns."""
+    for model_id in model_ids:
+        legacy = out / model_id
+        destination = runs_dir / model_id
+        if legacy.is_dir() and not destination.exists():
+            legacy.rename(destination)
+            print(f"migrated legacy model output -> {destination}", flush=True)
 
 
 def _docs_with_meta(docs, metas):
@@ -160,6 +191,17 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
     )
     out = Path(cfg.get("output_dir", "out"))
     out.mkdir(parents=True, exist_ok=True)
+    output_dirs = _output_dirs(out)
+    for directory in output_dirs.values():
+        directory.mkdir(parents=True, exist_ok=True)
+    runs_dir = output_dirs["runs"]
+    work_dir = output_dirs["work"]
+    analysis_raw_dir = output_dirs["analysis_raw"]
+    analysis_plots_dir = output_dirs["analysis_plots"]
+    _migrate_legacy_model_outputs(
+        out, runs_dir, (model["id"] for model in cfg.get("models", []))
+    )
+    _write_output_readme(out)
     # Where per-method run times are recorded (see deid_battery.timing). Kept OUT of
     # out/ by default so hand-added `manual` rows survive an out/ wipe.
     timings_path = cfg.get("timings", "timings.yaml")
@@ -197,7 +239,7 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
         per_cond = sensitive and multi
         for c in (conditions if per_cond else conditions[:1]):
             cid = c["id"]
-            raw_p = _raw_path(out, mid, runner, cid)
+            raw_p = _raw_path(runs_dir, mid, runner, cid)
             tag = _src_id(mid, cid) if per_cond else mid
             if no_run:
                 continue
@@ -232,7 +274,7 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
                 rdocs = _docs_with_meta(docs, metas)
                 runner_started = time.perf_counter()
                 if m.get("venv"):
-                    by = _run_in_venv(m["venv"], runner, params, rdocs, out)
+                    by = _run_in_venv(m["venv"], runner, params, rdocs, work_dir)
                 else:
                     by = get_runner(runner)(rdocs, params)
                 runner_seconds = time.perf_counter() - runner_started
@@ -265,13 +307,13 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
         mid, runner = m["id"], m["runner"]
         for c in conditions:
             cid = c["id"]
-            raw_p = _raw_path(out, mid, runner, cid)
+            raw_p = _raw_path(runs_dir, mid, runner, cid)
             if not raw_p.exists():
                 continue
             cpp = {**pp_cfg, **(c["postprocess"] or {})}
             postprocess_started = time.perf_counter()
             by = _postprocess(read_by_doc(raw_p), texts, metas_by_cond[cid], cpp)
-            write_by_doc(out / mid / f"by_doc{_suffix(cid)}.jsonl", by)
+            write_by_doc(runs_dir / mid / f"by_doc{_suffix(cid)}.jsonl", by)
             postprocess_seconds = time.perf_counter() - postprocess_started
 
             if cid == primary_timing_cid:
@@ -319,8 +361,12 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
         for c in conditions:
             cid = c["id"]
             sid = _src_id(m["id"], cid)
-            bp = out / m["id"] / f"by_doc{_suffix(cid)}.jsonl"
+            bp = runs_dir / m["id"] / f"by_doc{_suffix(cid)}.jsonl"
             if not bp.exists():
+                print(
+                    f"WARNING: [{sid}] excluded from evaluation -- output not found: {bp}",
+                    flush=True,
+                )
                 continue
             missing = input_ids - set(read_by_doc(bp))
             if missing:
@@ -343,7 +389,7 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
         for m in cfg["models"]:
             if m["id"] not in order:  # main source absent/excluded -> no raw overlay
                 continue
-            raw_p = out / m["id"] / "raw.jsonl"
+            raw_p = runs_dir / m["id"] / "raw.jsonl"
             if not raw_p.exists():
                 continue
             rid = m["id"] + "__raw"
@@ -365,10 +411,13 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
         timings = timing_mod.load(timings_path)
         doclens = {d["doc_id"]: len(d["text"]) for d in docs}
         payload = run_eval(by_doc_paths, ev["bundle"], doclens,
-                           ev.get("ignore_categories"), names, order, out)
-        (out / "quantity_payload.json").write_text(
+                           ev.get("ignore_categories"), names, order, work_dir)
+        (analysis_raw_dir / "quantity_payload.json").write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        summary = run_plot(payload, str(out / ev.get("plot", "core_pii_recall_non_pii_redaction.png")))
+        primary_plot = analysis_plots_dir / ev.get(
+            "plot", "core_pii_recall_non_pii_redaction.png"
+        )
+        summary = run_plot(payload, str(primary_plot))
         # Record the primary warm end-to-end value and its component phases in
         # summary.csv. The fields are repeated across metadata conditions because
         # raw inference is shared; the plot selects the with-metadata condition.
@@ -390,12 +439,12 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
                     timings.get(sid_model.get(str(s), str(s)), []), key
                 )
             )
-        summary.to_csv(out / "summary.csv", index=False)
+        summary.to_csv(analysis_raw_dir / "summary.csv", index=False)
         cols = ["source", "core_pii_recall", "non_pii_redaction_rate",
                 "prediction_span_count", "measured_seconds", "setup_seconds",
                 "cold_end_to_end_seconds"]
         print(summary[[c for c in cols if c in summary.columns]].to_string(index=False))
-        print(f"\nplot -> {out / ev.get('plot', 'core_pii_recall_non_pii_redaction.png')}")
+        print(f"\nplot -> {primary_plot}")
 
         # Time vs. recall (with-metadata condition), one dot per timings row, coloured
         # by device (cpu/gpu). Needs at least one (measured or manual) row in timings.yaml.
@@ -404,9 +453,12 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
             from .plot import plot_time_vs_recall
             meta_sids = {sid for sid in order if sid_cid.get(sid) in meta_cids}
             try:
-                if plot_time_vs_recall(payload, timings, str(out / tv_name),
-                                       meta_sids, sid_model, sid_label) is not None:
-                    print(f"plot -> {out / tv_name}  (data -> {(out / tv_name).with_suffix('.csv').name})")
+                plot_path = analysis_plots_dir / tv_name
+                csv_path = analysis_raw_dir / Path(tv_name).with_suffix(".csv")
+                if plot_time_vs_recall(payload, timings, str(plot_path),
+                                       meta_sids, sid_model, sid_label,
+                                       csv_path=csv_path) is not None:
+                    print(f"plot -> {plot_path}  (data -> {csv_path})")
                 else:
                     print(f"  [{tv_name}] skipped: no (time, recall) pairs -- "
                           f"add run times to {timings_path}", flush=True)
@@ -423,10 +475,31 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
             if not name:
                 continue
             try:
-                if fn(payload, str(out / name)) is not None:
-                    print(f"plot -> {out / name}  (data -> {(out / name).with_suffix('.csv').name})")
+                plot_path = analysis_plots_dir / name
+                csv_path = analysis_raw_dir / Path(name).with_suffix(".csv")
+                if fn(payload, str(plot_path), csv_path=csv_path) is not None:
+                    print(f"plot -> {plot_path}  (data -> {csv_path})")
             except Exception as e:  # noqa: BLE001
                 print(f"  [{name}] skipped: {type(e).__name__}: {str(e)[:120]}")
+
+        # Keep the per-source, one-to-one span-confusion matrices together. The
+        # parallel raw/plots trees keep tables auditable without mixing file types.
+        from .plot import save_label_confusion_analysis
+        confusion_raw_dir = analysis_raw_dir / "label_confusion"
+        confusion_plots_dir = analysis_plots_dir / "label_confusion"
+        try:
+            save_label_confusion_analysis(
+                payload, confusion_raw_dir, confusion_plots_dir
+            )
+            print(
+                "label confusion analysis -> "
+                f"{confusion_raw_dir} (raw), {confusion_plots_dir} (plots)"
+            )
+        except Exception as e:  # noqa: BLE001
+            print(
+                f"  [label_confusion] skipped: {type(e).__name__}: {str(e)[:120]}",
+                flush=True,
+            )
 
         # Extra, model-independent evidence for the shared substitution layer.
         # This is part of a normal battery run but also has a standalone entry
