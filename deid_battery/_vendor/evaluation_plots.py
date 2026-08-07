@@ -46,6 +46,8 @@ SOURCE_ORDER = [
 ]
 
 NON_PII_REDACTION_RATE_LABEL = "Non-PII redaction rate"
+FALSE_POSITIVE_SPANS_LABEL = "False-positive spans"
+PII_BOUNDARY_EXTENSIONS_LABEL = "PII boundary extensions"
 HEATMAP_CMAP = mcolors.LinearSegmentedColormap.from_list(
     "deid_accessible_red_green",
     ["#CC3311", "#F5F1E6", "#009E73"],
@@ -631,7 +633,7 @@ def plot_recall_and_non_pii_redaction(summary_df: pd.DataFrame, output_path: Pat
         color="#879393",
         edgecolor="#222222",
         linewidth=0.8,
-        label="Machine-only redaction",
+        label=FALSE_POSITIVE_SPANS_LABEL,
     )
     ax_fp.barh(
         y,
@@ -641,7 +643,7 @@ def plot_recall_and_non_pii_redaction(summary_df: pd.DataFrame, output_path: Pat
         color="#c7392f",
         edgecolor="#222222",
         linewidth=0.8,
-        label="Boundary-overflow redaction",
+        label=PII_BOUNDARY_EXTENSIONS_LABEL,
     )
     ax_fp.set_yticks(y, [])
     ax_fp.invert_yaxis()

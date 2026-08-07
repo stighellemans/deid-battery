@@ -200,8 +200,9 @@ recovers caregiver names for it.
 ## Evaluation
 
 Character-level core PII recall (with excluded categories) and a non-PII
-redaction rate split into machine-only and boundary-overflow redactions, scored against a
-`deid-eval-annotator` gold bundle (`reference_items.jsonl`). The evaluator and
+redaction rate split into false-positive spans and PII boundary extensions,
+scored against a `deid-eval-annotator` gold bundle
+(`reference_items.jsonl`). The evaluator and
 plot are vendored under `deid_battery/_vendor/` so the package is self-contained.
 
 In addition to model-detection metrics, a normal battery run evaluates the
