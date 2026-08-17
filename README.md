@@ -217,10 +217,13 @@ derives canonical `category`/`subtype` values from each label, and rejects
 conflicting duplicate documents.
 
 If an annotator is known to be partial, add `--allow-partial`. The converter
-does not guess missing labels: it excludes the entire document containing an
-unlabeled span and writes `coverage_manifest.json` plus
-`common_complete_doc_ids.txt`. Missing documents are recorded without
-imputation. The originals remain unchanged.
+does not guess a semantic label. It retains each explicitly marked span's
+geometry under the sentinel label `(missing label)` and writes an empty record
+for every input document absent from that annotator's folders. This permits
+full-corpus character recall: omitted spans/documents count as false negatives,
+while known span boundaries still count as redacted. The converter also writes
+`coverage_manifest.json` and `common_complete_doc_ids.txt`. The originals remain
+unchanged.
 
 For `deid-evaluation`, configure these files as `annotator-level-jsonl` sources:
 
@@ -238,10 +241,12 @@ annotations:
 
 These files contain sensitive document identifiers and span text and must remain
 on the approved evaluation machine; export only aggregate evaluation results.
-Do not evaluate a partial human JSONL against the full gold bundle: absent or
-incomplete documents would be counted as false negatives. Human-versus-system
-comparisons must restrict both humans and all systems to the document IDs in
-`common_complete_doc_ids.txt`. Full-corpus system results remain separate.
+For full-corpus human metrics, evaluate the generated JSONLs against the full
+gold bundle and clearly identify them as performance of the partial submission:
+absent annotations count as false negatives, and `(missing label)` is incorrect
+for semantic label metrics. As a sensitivity analysis, compare humans and
+systems on `common_complete_doc_ids.txt`; full-corpus system results remain
+separate and unchanged.
 
 ## Evaluation
 

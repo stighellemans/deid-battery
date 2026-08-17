@@ -30,6 +30,7 @@ from .schema import make_span, read_jsonl, write_by_doc
 
 
 DEFAULT_ANNOTATORS = ("stig", "tomstroobants")
+MISSING_LABEL = "(missing label)"
 
 
 class LegacyAnnotationError(ValueError):
@@ -117,12 +118,20 @@ def _required_integer(span: dict[str, Any], field: str, source: Path, index: int
     return integer
 
 
+def _raw_label(span: dict[str, Any]) -> Any:
+    label = span.get("label")
+    if isinstance(label, str) and label.strip():
+        return label
+    return span.get("Label")
+
+
 def _normalize_span(
     raw: Any,
     *,
     document_text: str,
     source: Path,
     index: int,
+    allow_missing_label: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise LegacyAnnotationError(f"{source}: span {index} is not an object")
@@ -135,20 +144,29 @@ def _normalize_span(
             f"for document length {len(document_text)}"
         )
 
-    label_value = raw.get("label", raw.get("Label"))
-    if not isinstance(label_value, str) or not label_value.strip():
+    label_value = _raw_label(raw)
+    missing_label = not isinstance(label_value, str) or not label_value.strip()
+    if missing_label and not allow_missing_label:
         raise LegacyAnnotationError(f"{source}: span {index} has no label")
-    label = label_value.strip()
+    label = MISSING_LABEL if missing_label else str(label_value).strip()
     category, subtype = split_label(label)
 
     legacy_category = raw.get("category", raw.get("Category"))
-    if legacy_category not in (None, "") and str(legacy_category) != category:
+    if (
+        not missing_label
+        and legacy_category not in (None, "")
+        and str(legacy_category) != category
+    ):
         raise LegacyAnnotationError(
             f"{source}: span {index} label {label!r} implies category {category!r}, "
             f"but legacy category is {legacy_category!r}"
         )
     legacy_subtype = raw.get("subtype", raw.get("Subtype"))
-    if legacy_subtype not in (None, "") and str(legacy_subtype) != subtype:
+    if (
+        not missing_label
+        and legacy_subtype not in (None, "")
+        and str(legacy_subtype) != subtype
+    ):
         raise LegacyAnnotationError(
             f"{source}: span {index} label {label!r} implies subtype {subtype!r}, "
             f"but legacy subtype is {legacy_subtype!r}"
@@ -206,20 +224,29 @@ def _load_annotator(
             signatures[doc_id] = signature
             discovered_documents.add(doc_id)
 
-            unlabeled_indices = tuple(
+            invalid_indices = tuple(
                 index
                 for index, raw in enumerate(raw_spans)
                 if not isinstance(raw, dict)
-                or not isinstance(raw.get("label", raw.get("Label")), str)
-                or not str(raw.get("label", raw.get("Label"))).strip()
+            )
+            if invalid_indices:
+                indices = ", ".join(str(index) for index in invalid_indices)
+                raise LegacyAnnotationError(
+                    f"{source}: span index/indices {indices} are not JSON objects"
+                )
+            unlabeled_indices = tuple(
+                index
+                for index, raw in enumerate(raw_spans)
+                if not isinstance(_raw_label(raw), str) or not str(_raw_label(raw)).strip()
             )
             if unlabeled_indices:
                 if not allow_partial:
                     indices = ", ".join(str(index) for index in unlabeled_indices)
                     raise LegacyAnnotationError(
                         f"{source}: unlabeled span index/indices {indices}; this marks the "
-                        "document as incomplete. Rerun with --allow-partial to exclude the "
-                        "whole document and record it in the coverage manifest"
+                        f"annotation as partial. Rerun with --allow-partial to retain its geometry "
+                        f"under the explicit {MISSING_LABEL!r} sentinel and record it in the "
+                        "coverage manifest"
                     )
                 incomplete_documents.append(
                     IncompleteDocument(
@@ -228,7 +255,6 @@ def _load_annotator(
                         unlabeled_span_indices=unlabeled_indices,
                     )
                 )
-                continue
 
             normalized = [
                 _normalize_span(
@@ -236,6 +262,7 @@ def _load_annotator(
                     document_text=input_documents[doc_id],
                     source=source,
                     index=index,
+                    allow_missing_label=allow_partial,
                 )
                 for index, raw in enumerate(raw_spans)
             ]
@@ -244,10 +271,6 @@ def _load_annotator(
 
     if not discovered_documents:
         raise LegacyAnnotationError(f"{source_root}: no JSON span files found for {annotator}")
-    if not by_doc:
-        raise LegacyAnnotationError(
-            f"{source_root}: no completely annotated documents found for {annotator}"
-        )
     return (
         by_doc,
         tuple(batch.name for batch in batches),
@@ -345,6 +368,12 @@ def convert_legacy_human_annotations(
                     f"{annotator}: missing {len(missing)} of {len(input_documents)} input "
                     f"documents: {preview}{suffix}"
                 )
+        else:
+            # Make the partial submission explicit over the full battery. The evaluator
+            # will score absent-document omissions as false negatives rather than relying
+            # on implicit missing-record behavior.
+            for doc_id in missing:
+                by_doc[doc_id] = []
 
         prepared.append(
             (annotator, by_doc, batches, duplicate_count, incomplete, missing)
@@ -352,15 +381,22 @@ def convert_legacy_human_annotations(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     summaries: list[ConversionSummary] = []
-    complete_sets = [set(by_doc) for _, by_doc, _, _, _, _ in prepared]
+    complete_sets = [
+        set(by_doc)
+        .difference(item.doc_id for item in incomplete)
+        .difference(missing)
+        for _, by_doc, _, _, incomplete, missing in prepared
+    ]
     common_complete = sorted(set.intersection(*complete_sets))
     manifest: dict[str, Any] = {
         "version": 1,
         "partial_import": any(incomplete or missing for _, _, _, _, incomplete, missing in prepared),
         "policy": {
-            "unlabeled_spans": "exclude_entire_document",
-            "missing_documents": "record_without_imputation",
+            "unlabeled_spans": f"retain_geometry_with_label_{MISSING_LABEL}",
+            "missing_documents": "write_empty_submission_and_score_omissions_as_false_negatives",
             "gold_annotations_used_for_repair": False,
+            "full_corpus_character_recall": "score_as_submitted",
+            "label_metrics": "missing-label sentinel is not a correct semantic label",
         },
         "battery_input_documents": len(input_documents),
         "common_complete_documents": len(common_complete),
@@ -372,9 +408,10 @@ def convert_legacy_human_annotations(
         output_path = _write_by_doc_atomic(output_dir / f"{annotator}.jsonl", ordered)
         manifest["annotators"][annotator] = {
             "batches": list(batches),
-            "complete_documents_written": len(ordered),
+            "documents_written": len(ordered),
+            "complete_documents": len(ordered) - len(incomplete) - len(missing),
             "spans_written": sum(len(spans) for spans in ordered.values()),
-            "incomplete_documents_excluded": [
+            "incomplete_documents_scored": [
                 {
                     "doc_id": item.doc_id,
                     "source_file": item.source_file,
@@ -382,7 +419,10 @@ def convert_legacy_human_annotations(
                 }
                 for item in incomplete
             ],
-            "missing_input_documents": missing,
+            "unlabeled_spans_assigned_missing_label": sum(
+                len(item.unlabeled_span_indices) for item in incomplete
+            ),
+            "missing_input_documents_scored_as_empty": missing,
             "identical_duplicate_documents": duplicate_count,
             "output_file": output_path.name,
         }
@@ -439,8 +479,9 @@ def _parser() -> argparse.ArgumentParser:
         "--allow-partial",
         action="store_true",
         help=(
-            "Allow partial annotators: exclude any document containing an unlabeled span, "
-            "record missing/incomplete documents, and write the common complete document set"
+            f"Allow partial annotators: retain unlabeled span geometry as {MISSING_LABEL!r}, "
+            "write absent documents as empty submissions, and record coverage for full-corpus "
+            "and complete-subset analyses"
         ),
     )
     return parser
@@ -462,8 +503,9 @@ def main() -> None:
         )
         if summary.incomplete_documents or summary.missing_documents:
             print(
-                f"  partial coverage: excluded {summary.incomplete_documents} incomplete "
-                f"documents; {summary.missing_documents} input documents were absent"
+                f"  partial coverage scored over the full input: "
+                f"{summary.incomplete_documents} documents contain missing-label spans; "
+                f"{summary.missing_documents} absent documents were written as empty submissions"
             )
         if summary.identical_duplicate_documents:
             print(

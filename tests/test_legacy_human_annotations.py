@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from deid_battery._vendor.data_readers import read_annotator_level_jsonl
 from deid_battery.legacy_human_annotations import (
     LegacyAnnotationError,
     convert_legacy_human_annotations,
@@ -152,7 +153,7 @@ def test_validates_all_annotators_before_replacing_outputs(tmp_path: Path) -> No
     assert not (output_dir / "tomstroobants.jsonl").exists()
 
 
-def test_partial_mode_excludes_unlabeled_document_and_records_coverage(tmp_path: Path) -> None:
+def test_partial_mode_retains_unlabeled_geometry_and_records_coverage(tmp_path: Path) -> None:
     input_path = tmp_path / "input.jsonl"
     source_root = tmp_path / "legacy"
     output_dir = tmp_path / "out"
@@ -182,20 +183,53 @@ def test_partial_mode_excludes_unlabeled_document_and_records_coverage(tmp_path:
         require_complete=False,
     )
 
-    assert summaries[0].documents == 1
+    assert summaries[0].documents == 2
     assert summaries[0].incomplete_documents == 1
     assert summaries[0].missing_documents == 0
-    assert [row["doc_id"] for row in read_jsonl(output_dir / "stig.jsonl")] == ["doc-b"]
+    rows = read_jsonl(output_dir / "stig.jsonl")
+    assert [row["doc_id"] for row in rows] == ["doc-a", "doc-b"]
+    assert rows[0]["entities"][0]["label"] == "(missing label)"
+    assert rows[0]["entities"][0]["category"] == "(missing label)"
+    assert rows[0]["entities"][0]["text"] == "16/06/2025"
+    normalized_records, issues = read_annotator_level_jsonl(output_dir / "stig.jsonl")
+    assert issues == []
+    assert normalized_records[0]["annotations"][0]["label"] == "(missing label)"
     manifest = json.loads((output_dir / "coverage_manifest.json").read_text(encoding="utf-8"))
-    excluded = manifest["annotators"]["stig"]["incomplete_documents_excluded"]
-    assert excluded == [
+    incomplete = manifest["annotators"]["stig"]["incomplete_documents_scored"]
+    assert incomplete == [
         {
             "doc_id": "doc-a",
             "source_file": "stig1/spans/doc-a.json",
             "unlabeled_span_indices": [0],
         }
     ]
+    assert manifest["annotators"]["stig"]["unlabeled_spans_assigned_missing_label"] == 1
     assert (output_dir / "common_complete_doc_ids.txt").read_text(encoding="utf-8") == "doc-b\n"
+
+
+def test_partial_mode_writes_missing_documents_as_empty_submissions(tmp_path: Path) -> None:
+    input_path = tmp_path / "input.jsonl"
+    source_root = tmp_path / "legacy"
+    output_dir = tmp_path / "out"
+    _write_input(input_path)
+    _write_json(source_root / "stig1" / "spans" / "doc-a.json", [])
+
+    summaries = convert_legacy_human_annotations(
+        source_root,
+        input_path,
+        output_dir,
+        annotators=["stig"],
+        require_complete=False,
+    )
+
+    assert summaries[0].documents == 2
+    assert summaries[0].missing_documents == 1
+    rows = read_jsonl(output_dir / "stig.jsonl")
+    assert rows[1] == {"doc_id": "doc-b", "num_entities": 0, "entities": []}
+    manifest = json.loads((output_dir / "coverage_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["annotators"]["stig"]["missing_input_documents_scored_as_empty"] == [
+        "doc-b"
+    ]
 
 
 def test_strict_mode_explains_how_to_handle_unlabeled_span(tmp_path: Path) -> None:
