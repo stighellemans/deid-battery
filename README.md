@@ -214,8 +214,13 @@ This writes `out/human-annotators/stig.jsonl` and
 `out/human-annotators/tomstroobants.jsonl`. The converter checks complete
 document coverage, validates every offset and span text against `input.jsonl`,
 derives canonical `category`/`subtype` values from each label, and rejects
-conflicting duplicate documents. Use `--allow-partial` only for an explicitly
-partial diagnostic import.
+conflicting duplicate documents.
+
+If an annotator is known to be partial, add `--allow-partial`. The converter
+does not guess missing labels: it excludes the entire document containing an
+unlabeled span and writes `coverage_manifest.json` plus
+`common_complete_doc_ids.txt`. Missing documents are recorded without
+imputation. The originals remain unchanged.
 
 For `deid-evaluation`, configure these files as `annotator-level-jsonl` sources:
 
@@ -233,6 +238,10 @@ annotations:
 
 These files contain sensitive document identifiers and span text and must remain
 on the approved evaluation machine; export only aggregate evaluation results.
+Do not evaluate a partial human JSONL against the full gold bundle: absent or
+incomplete documents would be counted as false negatives. Human-versus-system
+comparisons must restrict both humans and all systems to the document IDs in
+`common_complete_doc_ids.txt`. Full-corpus system results remain separate.
 
 ## Evaluation
 

@@ -59,6 +59,8 @@ def test_merges_numbered_batches_and_normalizes_spans(tmp_path: Path) -> None:
 
     assert summaries[0].documents == 2
     assert summaries[0].spans == 2
+    assert summaries[0].incomplete_documents == 0
+    assert summaries[0].missing_documents == 0
     assert summaries[0].batches == ("stig1", "stig2")
     rows = read_jsonl(output_dir / "stig.jsonl")
     assert [row["doc_id"] for row in rows] == ["doc-a", "doc-b"]
@@ -72,6 +74,9 @@ def test_merges_numbered_batches_and_normalizes_spans(tmp_path: Path) -> None:
     }
     assert rows[1]["entities"][0]["category"] == "Name"
     assert rows[1]["entities"][0]["subtype"] == "Patient"
+    manifest = json.loads((output_dir / "coverage_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["partial_import"] is False
+    assert manifest["common_complete_documents"] == 2
 
 
 def test_rejects_span_text_that_does_not_match_input(tmp_path: Path) -> None:
@@ -145,3 +150,67 @@ def test_validates_all_annotators_before_replacing_outputs(tmp_path: Path) -> No
 
     assert existing.read_text(encoding="utf-8") == "existing output\n"
     assert not (output_dir / "tomstroobants.jsonl").exists()
+
+
+def test_partial_mode_excludes_unlabeled_document_and_records_coverage(tmp_path: Path) -> None:
+    input_path = tmp_path / "input.jsonl"
+    source_root = tmp_path / "legacy"
+    output_dir = tmp_path / "out"
+    _write_input(input_path)
+    _write_json(
+        source_root / "stig1" / "spans" / "doc-a.json",
+        [{"begin": 6, "end": 16, "text": "16/06/2025", "Category": "Date"}],
+    )
+    _write_json(
+        source_root / "stig1" / "spans" / "doc-b.json",
+        [
+            {
+                "begin": 9,
+                "end": 21,
+                "label": "Name:Patient",
+                "text": "Ada Lovelace",
+                "Category": "Name",
+            }
+        ],
+    )
+
+    summaries = convert_legacy_human_annotations(
+        source_root,
+        input_path,
+        output_dir,
+        annotators=["stig"],
+        require_complete=False,
+    )
+
+    assert summaries[0].documents == 1
+    assert summaries[0].incomplete_documents == 1
+    assert summaries[0].missing_documents == 0
+    assert [row["doc_id"] for row in read_jsonl(output_dir / "stig.jsonl")] == ["doc-b"]
+    manifest = json.loads((output_dir / "coverage_manifest.json").read_text(encoding="utf-8"))
+    excluded = manifest["annotators"]["stig"]["incomplete_documents_excluded"]
+    assert excluded == [
+        {
+            "doc_id": "doc-a",
+            "source_file": "stig1/spans/doc-a.json",
+            "unlabeled_span_indices": [0],
+        }
+    ]
+    assert (output_dir / "common_complete_doc_ids.txt").read_text(encoding="utf-8") == "doc-b\n"
+
+
+def test_strict_mode_explains_how_to_handle_unlabeled_span(tmp_path: Path) -> None:
+    input_path = tmp_path / "input.jsonl"
+    source_root = tmp_path / "legacy"
+    _write_input(input_path)
+    _write_json(
+        source_root / "stig1" / "spans" / "doc-a.json",
+        [{"begin": 6, "end": 16, "text": "16/06/2025", "Category": "Date"}],
+    )
+
+    with pytest.raises(LegacyAnnotationError, match="Rerun with --allow-partial"):
+        convert_legacy_human_annotations(
+            source_root,
+            input_path,
+            tmp_path / "out",
+            annotators=["stig"],
+        )

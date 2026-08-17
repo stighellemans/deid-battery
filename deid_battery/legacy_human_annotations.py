@@ -42,8 +42,17 @@ class ConversionSummary:
     batches: tuple[str, ...]
     documents: int
     spans: int
+    incomplete_documents: int
+    missing_documents: int
     identical_duplicate_documents: int
     output_path: Path
+
+
+@dataclass(frozen=True)
+class IncompleteDocument:
+    doc_id: str
+    source_file: str
+    unlabeled_span_indices: tuple[int, ...]
 
 
 def _load_input_documents(path: Path) -> dict[str, str]:
@@ -126,7 +135,7 @@ def _normalize_span(
             f"for document length {len(document_text)}"
         )
 
-    label_value = raw.get("label")
+    label_value = raw.get("label", raw.get("Label"))
     if not isinstance(label_value, str) or not label_value.strip():
         raise LegacyAnnotationError(f"{source}: span {index} has no label")
     label = label_value.strip()
@@ -162,9 +171,20 @@ def _load_annotator(
     source_root: Path,
     annotator: str,
     input_documents: dict[str, str],
-) -> tuple[dict[str, list[dict[str, Any]]], tuple[str, ...], int]:
+    *,
+    allow_partial: bool,
+) -> tuple[
+    dict[str, list[dict[str, Any]]],
+    tuple[str, ...],
+    int,
+    list[IncompleteDocument],
+    set[str],
+]:
     batches = _discover_batches(source_root, annotator)
     by_doc: dict[str, list[dict[str, Any]]] = {}
+    signatures: dict[str, str] = {}
+    discovered_documents: set[str] = set()
+    incomplete_documents: list[IncompleteDocument] = []
     duplicate_count = 0
 
     for batch in batches:
@@ -174,6 +194,42 @@ def _load_annotator(
                 raise LegacyAnnotationError(
                     f"{source}: document id {doc_id!r} is absent from input.jsonl"
                 )
+            raw_spans = _raw_span_list(source)
+            signature = json.dumps(raw_spans, ensure_ascii=False, sort_keys=True)
+            if doc_id in signatures:
+                if signatures[doc_id] != signature:
+                    raise LegacyAnnotationError(
+                        f"{source}: conflicting duplicate document {doc_id!r} for {annotator}"
+                    )
+                duplicate_count += 1
+                continue
+            signatures[doc_id] = signature
+            discovered_documents.add(doc_id)
+
+            unlabeled_indices = tuple(
+                index
+                for index, raw in enumerate(raw_spans)
+                if not isinstance(raw, dict)
+                or not isinstance(raw.get("label", raw.get("Label")), str)
+                or not str(raw.get("label", raw.get("Label"))).strip()
+            )
+            if unlabeled_indices:
+                if not allow_partial:
+                    indices = ", ".join(str(index) for index in unlabeled_indices)
+                    raise LegacyAnnotationError(
+                        f"{source}: unlabeled span index/indices {indices}; this marks the "
+                        "document as incomplete. Rerun with --allow-partial to exclude the "
+                        "whole document and record it in the coverage manifest"
+                    )
+                incomplete_documents.append(
+                    IncompleteDocument(
+                        doc_id=doc_id,
+                        source_file=str(source.relative_to(source_root)),
+                        unlabeled_span_indices=unlabeled_indices,
+                    )
+                )
+                continue
+
             normalized = [
                 _normalize_span(
                     raw,
@@ -181,22 +237,24 @@ def _load_annotator(
                     source=source,
                     index=index,
                 )
-                for index, raw in enumerate(_raw_span_list(source))
+                for index, raw in enumerate(raw_spans)
             ]
             normalized.sort(key=lambda span: (span["begin"], span["end"], span["label"]))
-
-            if doc_id in by_doc:
-                if by_doc[doc_id] != normalized:
-                    raise LegacyAnnotationError(
-                        f"{source}: conflicting duplicate document {doc_id!r} for {annotator}"
-                    )
-                duplicate_count += 1
-                continue
             by_doc[doc_id] = normalized
 
-    if not by_doc:
+    if not discovered_documents:
         raise LegacyAnnotationError(f"{source_root}: no JSON span files found for {annotator}")
-    return by_doc, tuple(batch.name for batch in batches), duplicate_count
+    if not by_doc:
+        raise LegacyAnnotationError(
+            f"{source_root}: no completely annotated documents found for {annotator}"
+        )
+    return (
+        by_doc,
+        tuple(batch.name for batch in batches),
+        duplicate_count,
+        incomplete_documents,
+        discovered_documents,
+    )
 
 
 def _write_by_doc_atomic(path: Path, by_doc: dict[str, list[dict[str, Any]]]) -> Path:
@@ -211,6 +269,27 @@ def _write_by_doc_atomic(path: Path, by_doc: dict[str, list[dict[str, Any]]]) ->
         ) as temporary:
             temporary_path = Path(temporary.name)
         write_by_doc(temporary_path, by_doc)
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+    return path
+
+
+def _write_text_atomic(path: Path, content: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as temporary:
+            temporary.write(content)
+            temporary_path = Path(temporary.name)
         temporary_path.replace(path)
     finally:
         if temporary_path is not None and temporary_path.exists():
@@ -241,14 +320,24 @@ def convert_legacy_human_annotations(
         raise LegacyAnnotationError("at least one annotator is required")
 
     prepared: list[
-        tuple[str, dict[str, list[dict[str, Any]]], tuple[str, ...], int]
+        tuple[
+            str,
+            dict[str, list[dict[str, Any]]],
+            tuple[str, ...],
+            int,
+            list[IncompleteDocument],
+            list[str],
+        ]
     ] = []
     for annotator in selected:
-        by_doc, batches, duplicate_count = _load_annotator(
-            source_root, annotator, input_documents
+        by_doc, batches, duplicate_count, incomplete, discovered = _load_annotator(
+            source_root,
+            annotator,
+            input_documents,
+            allow_partial=not require_complete,
         )
+        missing = sorted(set(input_documents).difference(discovered))
         if require_complete:
-            missing = sorted(set(input_documents).difference(by_doc))
             if missing:
                 preview = ", ".join(missing[:5])
                 suffix = "" if len(missing) <= 5 else f", ... ({len(missing)} total)"
@@ -257,23 +346,66 @@ def convert_legacy_human_annotations(
                     f"documents: {preview}{suffix}"
                 )
 
-        prepared.append((annotator, by_doc, batches, duplicate_count))
+        prepared.append(
+            (annotator, by_doc, batches, duplicate_count, incomplete, missing)
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     summaries: list[ConversionSummary] = []
-    for annotator, by_doc, batches, duplicate_count in prepared:
+    complete_sets = [set(by_doc) for _, by_doc, _, _, _, _ in prepared]
+    common_complete = sorted(set.intersection(*complete_sets))
+    manifest: dict[str, Any] = {
+        "version": 1,
+        "partial_import": any(incomplete or missing for _, _, _, _, incomplete, missing in prepared),
+        "policy": {
+            "unlabeled_spans": "exclude_entire_document",
+            "missing_documents": "record_without_imputation",
+            "gold_annotations_used_for_repair": False,
+        },
+        "battery_input_documents": len(input_documents),
+        "common_complete_documents": len(common_complete),
+        "common_complete_doc_ids_file": "common_complete_doc_ids.txt",
+        "annotators": {},
+    }
+    for annotator, by_doc, batches, duplicate_count, incomplete, missing in prepared:
         ordered = {doc_id: by_doc[doc_id] for doc_id in sorted(by_doc)}
         output_path = _write_by_doc_atomic(output_dir / f"{annotator}.jsonl", ordered)
+        manifest["annotators"][annotator] = {
+            "batches": list(batches),
+            "complete_documents_written": len(ordered),
+            "spans_written": sum(len(spans) for spans in ordered.values()),
+            "incomplete_documents_excluded": [
+                {
+                    "doc_id": item.doc_id,
+                    "source_file": item.source_file,
+                    "unlabeled_span_indices": list(item.unlabeled_span_indices),
+                }
+                for item in incomplete
+            ],
+            "missing_input_documents": missing,
+            "identical_duplicate_documents": duplicate_count,
+            "output_file": output_path.name,
+        }
         summaries.append(
             ConversionSummary(
                 annotator=annotator,
                 batches=batches,
                 documents=len(ordered),
                 spans=sum(len(spans) for spans in ordered.values()),
+                incomplete_documents=len(incomplete),
+                missing_documents=len(missing),
                 identical_duplicate_documents=duplicate_count,
                 output_path=output_path,
             )
         )
+    _write_text_atomic(
+        output_dir / "common_complete_doc_ids.txt",
+        "".join(f"{doc_id}\n" for doc_id in common_complete),
+    )
+    _write_text_atomic(
+        output_dir / "coverage_manifest.json",
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+    )
     return summaries
 
 
@@ -306,7 +438,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--allow-partial",
         action="store_true",
-        help="Allow an annotator to cover only part of input.jsonl",
+        help=(
+            "Allow partial annotators: exclude any document containing an unlabeled span, "
+            "record missing/incomplete documents, and write the common complete document set"
+        ),
     )
     return parser
 
@@ -325,11 +460,21 @@ def main() -> None:
             f"{summary.annotator}: {summary.documents} documents, {summary.spans} spans "
             f"from {', '.join(summary.batches)} -> {summary.output_path}"
         )
+        if summary.incomplete_documents or summary.missing_documents:
+            print(
+                f"  partial coverage: excluded {summary.incomplete_documents} incomplete "
+                f"documents; {summary.missing_documents} input documents were absent"
+            )
         if summary.identical_duplicate_documents:
             print(
                 f"  deduplicated {summary.identical_duplicate_documents} identical "
                 "document copies"
             )
+    print(f"coverage manifest -> {Path(args.output_dir).resolve() / 'coverage_manifest.json'}")
+    print(
+        "common complete document ids -> "
+        f"{Path(args.output_dir).resolve() / 'common_complete_doc_ids.txt'}"
+    )
 
 
 if __name__ == "__main__":
