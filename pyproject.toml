@@ -25,6 +25,7 @@ llm = ["requests>=2.28"]
 [project.scripts]
 deid-battery = "deid_battery.orchestrate:main"
 deid-battery-import-humans = "deid_battery.legacy_human_annotations:main"
+deid-battery-report-human-missingness = "deid_battery.human_annotation_missingness:main"
 
 [tool.setuptools]
 packages = [

@@ -225,6 +225,19 @@ while known span boundaries still count as redacted. The converter also writes
 `coverage_manifest.json` and `common_complete_doc_ids.txt`. The originals remain
 unchanged.
 
+Inspect every missing-label span, absent document, empty annotation file and
+malformed record without modifying the source data:
+
+```bash
+python -m deid_battery.human_annotation_missingness \
+  --source-root /home/s0176515/Desktop/admin/annotations/llm_experiment \
+  --battery-input input.jsonl \
+  --output out/human-annotators/missingness.tsv
+```
+
+The TSV omits span text by default. Add `--include-text` only on the approved
+evaluation machine, or use `--format jsonl` for a machine-readable report.
+
 For `deid-evaluation`, configure these files as `annotator-level-jsonl` sources:
 
 ```yaml
