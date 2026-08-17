@@ -197,6 +197,43 @@ recovers caregiver names for it.
  "Category": "Name", "Subtype": "Patient"}
 ```
 
+### Importing the legacy UZA human annotations
+
+The old human annotations are stored as per-document JSON arrays under numbered
+folders such as `stig1/spans/` and `tomstroobants1/spans/`. Convert all numbered
+batches into one battery JSONL file per annotator with:
+
+```bash
+python -m deid_battery.legacy_human_annotations \
+  --source-root /home/s0176515/Desktop/admin/annotations/llm_experiment \
+  --battery-input input.jsonl \
+  --output-dir out/human-annotators
+```
+
+This writes `out/human-annotators/stig.jsonl` and
+`out/human-annotators/tomstroobants.jsonl`. The converter checks complete
+document coverage, validates every offset and span text against `input.jsonl`,
+derives canonical `category`/`subtype` values from each label, and rejects
+conflicting duplicate documents. Use `--allow-partial` only for an explicitly
+partial diagnostic import.
+
+For `deid-evaluation`, configure these files as `annotator-level-jsonl` sources:
+
+```yaml
+annotations:
+  stig:
+    name: Annotator 1
+    method: annotator-level-jsonl
+    path: /home/s0176515/Desktop/admin/deid-battery/out/human-annotators/stig.jsonl
+  tomstroobants:
+    name: Annotator 2
+    method: annotator-level-jsonl
+    path: /home/s0176515/Desktop/admin/deid-battery/out/human-annotators/tomstroobants.jsonl
+```
+
+These files contain sensitive document identifiers and span text and must remain
+on the approved evaluation machine; export only aggregate evaluation results.
+
 ## Evaluation
 
 Character-level core PII recall (with excluded categories) and a non-PII
