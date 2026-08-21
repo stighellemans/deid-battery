@@ -112,6 +112,18 @@ Finished models are skipped; a model that was mid-flight continues from
 An incomplete model is **excluded from the evaluation/plot with a warning** until
 it's finished, so a partial run never skews the scores.
 
+To refresh evaluation after installing a new deid-battery revision, use the
+inference-free command on each VM/result directory:
+
+```bash
+.venv/bin/python -m deid_battery.orchestrate evaluate --config configs/battery.yaml
+```
+
+This command never imports a configured runner. It re-applies deterministic
+post-processing to each completed `raw.jsonl`, then regenerates the evaluation,
+plots, and configured document-clustered bootstrap intervals. Do not point it at
+an output directory while an inference process is still writing there.
+
 ## 6. Take only the aggregates off the VM, then stop it
 
 ```bash

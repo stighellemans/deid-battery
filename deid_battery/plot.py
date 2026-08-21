@@ -1,4 +1,4 @@
-"""Core PII recall + non-PII redaction rate plot, from an evaluation payload.
+"""Configured recall + non-PII redaction rate plots from an evaluation payload.
 
 Wraps the vendored ``evaluation_plots`` (matplotlib). Sources with zero
 predictions are dropped from the plot. Returns the summary DataFrame.
@@ -18,7 +18,15 @@ def _csv_beside(out_path):
     return None if out_path is None else Path(out_path).with_suffix(".csv")
 
 
-def _recall_matrix_to_frame(matrix, counts, row_name, count_name):
+def _recall_matrix_to_frame(
+    matrix,
+    counts,
+    row_name,
+    count_name,
+    *,
+    extra_counts=None,
+    extra_count_name=None,
+):
     """Flatten the (row-label x source) recall matrix behind a heatmap into a
     saveable frame: the row label, its gold count (the number shown in the
     heatmap's y-tick), then one recall column per source -- rows kept in the
@@ -26,22 +34,40 @@ def _recall_matrix_to_frame(matrix, counts, row_name, count_name):
     frame = matrix.reset_index()
     frame.columns = [row_name, *frame.columns[1:]]
     frame.insert(1, count_name, [int(counts.get(r, 0)) for r in matrix.index])
+    if extra_counts is not None and extra_count_name is not None:
+        frame.insert(
+            2,
+            extra_count_name,
+            [int(extra_counts.get(r, 0)) for r in matrix.index],
+        )
     return frame
 
 
-def plot(payload: dict, out_path):
+def plot(
+    payload: dict,
+    out_path,
+    *,
+    recall_key: str = "core_pii_recall",
+    recall_label: str = "Core PII recall",
+):
     import evaluation_plots as ep
 
     summary = ep.build_summary_frame(payload)
     if not summary.empty:
         summary = summary[summary["prediction_span_count"] > 0].reset_index(drop=True)
-    ep.plot_recall_and_non_pii_redaction(summary, output_path=out_path)
+    ep.plot_recall_and_non_pii_redaction(
+        summary,
+        output_path=out_path,
+        recall_key=recall_key,
+        recall_label=recall_label,
+    )
     return summary
 
 
 def plot_time_vs_recall(payload: dict, timings: dict, out_path,
                         include_sids=None, sid_to_model=None, sid_to_label=None,
-                        recall_key: str = "core_pii_recall", csv_path=None):
+                        recall_key: str = "core_pii_recall", csv_path=None,
+                        recall_label: str = "Core PII recall"):
     """Scatter of warm end-to-end time vs recall, one dot per timings row,
     coloured by device (cpu/gpu). ``include_sids`` restricts to the with-metadata
     sources; ``sid_to_model`` maps a source id (e.g. ``uza@meta``) to its model id
@@ -140,7 +166,7 @@ def plot_time_vs_recall(payload: dict, timings: dict, out_path,
         ax.set_xlabel("Warm end-to-end time (seconds)")
     ax.set_ylim(0, 1.0)
     ax.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=0))
-    ax.set_ylabel("Core PII recall (with metadata)")
+    ax.set_ylabel(recall_label)
     ax.set_title("Warm End-to-End Time vs. Recall", fontsize=18, weight="bold", pad=14)
     ax.grid(color="#d0d0d0", linewidth=0.8)
     ax.set_axisbelow(True)
@@ -167,20 +193,45 @@ def plot_time_vs_recall(payload: dict, timings: dict, out_path,
     return fig
 
 
-def plot_recall_by_gold_label(payload: dict, out_path, csv_path=None):
-    """Core PII recall heatmap: gold label (row) x source (col)."""
+def plot_recall_by_gold_label(
+    payload: dict,
+    out_path,
+    csv_path=None,
+    *,
+    metric_key: str = "core_pii_recall",
+    recall_label: str = "Core PII recall",
+):
+    """Character-level configured recall: gold label (row) x source (col)."""
     import evaluation_plots as ep
     matrix, counts = ep.build_recall_matrix(
         payload, group_name="by_gold_label", row_key="gold_label",
-        metric_key="core_pii_recall", count_key="gold_span_count")
+        metric_key=metric_key, count_key="gold_span_count")
+    _, annotation_char_counts = ep.build_recall_matrix(
+        payload, group_name="by_gold_label", row_key="gold_label",
+        metric_key=metric_key, count_key="total_chars")
     if matrix.empty:
         return None
     csv_path = Path(csv_path) if csv_path is not None else _csv_beside(out_path)
     if csv_path is not None:
-        _recall_matrix_to_frame(matrix, counts, "gold_label", "gold_span_count").to_csv(
-            csv_path, index=False)
-    return ep.plot_recall_heatmap(matrix, counts, "Core PII recall by gold label",
-                                  "spans", output_path=out_path)
+        _recall_matrix_to_frame(
+            matrix,
+            counts,
+            "gold_label",
+            "gold_span_count",
+            extra_counts=annotation_char_counts,
+            extra_count_name=(
+                "total_annotation_chars"
+                if metric_key == "overall_recall"
+                else "total_core_pii_chars"
+            ),
+        ).to_csv(csv_path, index=False)
+    return ep.plot_recall_heatmap(
+        matrix,
+        annotation_char_counts,
+        f"{recall_label} by gold label",
+        "annotation chars" if metric_key == "overall_recall" else "core PII chars",
+        output_path=out_path,
+    )
 
 
 def plot_recall_by_subannotation_category(payload: dict, out_path, csv_path=None):

@@ -138,6 +138,11 @@ evaluate:
   enabled: true
   bundle: evaluation_bundle
   ignore_categories: [formatting, additional_info, medical_info, time, title]
+  bootstrap:
+    enabled: true
+    replicates: 10000
+    seed: 20260821
+    confidence_level: 0.95
   plot: core_pii_recall_non_pii_redaction.png
   plot_time_vs_recall: time_vs_recall.png
   # Extra evidence about the shared substitution layer. This deliberately uses

@@ -126,6 +126,21 @@ The main outputs are `analysis/raw/summary.csv`,
 tables and per-source matrices live under `analysis/raw/label_confusion/` and
 `analysis/plots/label_confusion/`.
 
+When `evaluate.bootstrap.enabled` is true, `analysis/raw/bootstrap/` also
+contains document-clustered percentile intervals in `estimates.csv`, paired
+source contrasts in `paired_differences.csv`, and the exact sampling contract
+in `methodology.json`.
+
+To regenerate post-processing, evaluation, plots, and bootstrap outputs from
+persisted `raw.jsonl` files without invoking any model runner, use the explicit
+evaluation-only command:
+
+```bash
+.venv/bin/python -m deid_battery.orchestrate evaluate --config configs/battery.yaml
+```
+
+`run --no-run` remains a backwards-compatible spelling of the same workflow.
+
 Neural runners warm up non-empty documents by default (enough to fill a configured
 RobBERT/GLiNER batch; one for unbatched local runners; zero for remote LLM
 endpoints), then record model setup, warm-up, resident inference, shared

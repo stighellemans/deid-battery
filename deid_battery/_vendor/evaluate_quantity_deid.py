@@ -565,7 +565,11 @@ def summarize_gold_characters(
     non_pii_chars = None
     if lengths_by_doc is not None:
         total_document_chars = 0
-        for doc_id in sorted(reference_doc_ids):
+        # ``document_lengths`` is the authoritative evaluation population.  A
+        # document with no gold items is a valid hard negative and must still
+        # contribute all of its characters to the non-PII denominator.
+        evaluated_doc_ids = reference_doc_ids | set(lengths_by_doc)
+        for doc_id in sorted(evaluated_doc_ids):
             doc_length = lengths_by_doc.get(doc_id)
             if doc_length is None:
                 doc_length = reference_extent_by_doc.get(doc_id)

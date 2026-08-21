@@ -414,10 +414,29 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
                            ev.get("ignore_categories"), names, order, work_dir)
         (analysis_raw_dir / "quantity_payload.json").write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        recall_key = ev.get("recall_metric", "core_pii_recall")
+        if recall_key not in {"core_pii_recall", "overall_recall"}:
+            raise ValueError(
+                "evaluate.recall_metric must be core_pii_recall or overall_recall"
+            )
+        recall_label = ev.get(
+            "recall_label",
+            "Annotation recall" if recall_key == "overall_recall" else "Core PII recall",
+        )
         primary_plot = analysis_plots_dir / ev.get(
             "plot", "core_pii_recall_non_pii_redaction.png"
         )
-        summary = run_plot(payload, str(primary_plot))
+        summary = run_plot(
+            payload,
+            str(primary_plot),
+            recall_key=recall_key,
+            recall_label=recall_label,
+        )
+        if recall_key == "overall_recall":
+            # Keep the ordinary annotation-recall export focused: the raw
+            # evaluator payload retains its backwards-compatible fields, while
+            # the user-facing summary contains only the configured headline.
+            summary = summary.drop(columns=["core_pii_recall"], errors="ignore")
         # Record the primary warm end-to-end value and its component phases in
         # summary.csv. The fields are repeated across metadata conditions because
         # raw inference is shared; the plot selects the with-metadata condition.
@@ -440,23 +459,50 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
                 )
             )
         summary.to_csv(analysis_raw_dir / "summary.csv", index=False)
-        cols = ["source", "core_pii_recall", "non_pii_redaction_rate",
+        cols = ["source", recall_key, "non_pii_redaction_rate",
                 "prediction_span_count", "measured_seconds", "setup_seconds",
                 "cold_end_to_end_seconds"]
         print(summary[[c for c in cols if c in summary.columns]].to_string(index=False))
         print(f"\nplot -> {primary_plot}")
+
+        bootstrap_cfg = ev.get("bootstrap") or {}
+        if bootstrap_cfg.get("enabled", False):
+            from .bootstrap import save_bootstrap
+
+            bootstrap_dir = analysis_raw_dir / bootstrap_cfg.get("output_dir", "bootstrap")
+            estimates, differences, _ = save_bootstrap(
+                payload,
+                doclens,
+                bootstrap_dir,
+                recall_key=recall_key,
+                replicates=int(bootstrap_cfg.get("replicates", 10_000)),
+                seed=int(bootstrap_cfg.get("seed", 20_260_821)),
+                confidence_level=float(bootstrap_cfg.get("confidence_level", 0.95)),
+                pairs=bootstrap_cfg.get("pairs"),
+            )
+            print(
+                f"bootstrap -> {bootstrap_dir} "
+                f"({len(estimates)} estimates; {len(differences)} paired contrasts)",
+                flush=True,
+            )
 
         # Time vs. recall (with-metadata condition), one dot per timings row, coloured
         # by device (cpu/gpu). Needs at least one (measured or manual) row in timings.yaml.
         tv_name = ev.get("plot_time_vs_recall", "time_vs_recall.png")
         if tv_name and timings:
             from .plot import plot_time_vs_recall
-            meta_sids = {sid for sid in order if sid_cid.get(sid) in meta_cids}
+            meta_sids = (
+                {sid for sid in order if sid_cid.get(sid) in meta_cids}
+                if meta_cids
+                else set(order)
+            )
             try:
                 plot_path = analysis_plots_dir / tv_name
                 csv_path = analysis_raw_dir / Path(tv_name).with_suffix(".csv")
                 if plot_time_vs_recall(payload, timings, str(plot_path),
                                        meta_sids, sid_model, sid_label,
+                                       recall_key=recall_key,
+                                       recall_label=recall_label,
                                        csv_path=csv_path) is not None:
                     print(f"plot -> {plot_path}  (data -> {csv_path})")
                 else:
@@ -477,7 +523,13 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
             try:
                 plot_path = analysis_plots_dir / name
                 csv_path = analysis_raw_dir / Path(name).with_suffix(".csv")
-                if fn(payload, str(plot_path), csv_path=csv_path) is not None:
+                kwargs = {"csv_path": csv_path}
+                if key == "plot_by_gold_label":
+                    kwargs.update(
+                        metric_key=recall_key,
+                        recall_label=recall_label,
+                    )
+                if fn(payload, str(plot_path), **kwargs) is not None:
                     print(f"plot -> {plot_path}  (data -> {csv_path})")
             except Exception as e:  # noqa: BLE001
                 print(f"  [{name}] skipped: {type(e).__name__}: {str(e)[:120]}")
@@ -510,7 +562,11 @@ def run(config_path, only=None, skip_existing=False, no_run=False, device=None, 
 
 def main():
     ap = argparse.ArgumentParser(description="Run the deid-battery.")
-    ap.add_argument("command", choices=["run"])
+    ap.add_argument(
+        "command",
+        choices=["run", "evaluate"],
+        help="`evaluate` reuses existing raw outputs and never invokes a model runner",
+    )
     ap.add_argument("--config", required=True)
     ap.add_argument("--only", default=None,
                     help="comma-separated model ids to (re)run; others reuse their existing output")
@@ -551,7 +607,8 @@ def main():
     a = ap.parse_args()
     only = [s.strip() for s in a.only.split(",") if s.strip()] if a.only else None
     exclude = [s.strip() for s in a.exclude.split(",") if s.strip()] if a.exclude else None
-    run(a.config, only=only, skip_existing=a.skip_existing, no_run=a.no_run,
+    no_run = a.no_run or a.command == "evaluate"
+    run(a.config, only=only, skip_existing=a.skip_existing, no_run=no_run,
         device=a.device, batch_size=a.batch_size, exclude=exclude,
         input_path=a.input_path, output_dir=a.output_dir,
         evaluation_bundle=a.evaluation_bundle, timings=a.timings,

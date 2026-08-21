@@ -92,10 +92,34 @@ pseudonymization configuration should use
 
 Source display order follows the `models:` list, with each model's conditions in
 the order of the `conditions:` list. Reorder those lists to change report order,
-then run the orchestrator with `--no-run` to regenerate analysis from existing
-outputs. This is separate from a RobBERT model's `entity_labels:` list: that list
+then run the orchestrator's `evaluate` command to regenerate analysis from
+existing raw outputs without model inference (`run --no-run` is retained as an
+alias). This is separate from a RobBERT model's `entity_labels:` list: that list
 is the checkpoint's load-bearing classifier index map and must never be reordered
 for presentation.
+
+## Document-clustered bootstrap
+
+Set `evaluate.bootstrap.enabled: true` to generate 95% confidence intervals for
+the configured recall metric and non-PII redaction rate. The default manuscript
+contract uses 10,000 replicates, seed `20260821`, and percentile intervals.
+Documents—not individual spans or characters—are sampled with replacement. All
+gold spans and every source's outputs within a selected document stay together,
+so source differences are paired and hard-negative documents remain in the
+non-PII denominator.
+
+```yaml
+evaluate:
+  bootstrap:
+    enabled: true
+    replicates: 10000
+    seed: 20260821
+    confidence_level: 0.95
+```
+
+By default all available sources are contrasted pairwise. Set `pairs` to a list
+of annotation-ID pairs to limit the output, for example
+`pairs: [[model, annotator-1], [model, annotator-2]]`.
 
 ## Device behavior
 

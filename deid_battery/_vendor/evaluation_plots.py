@@ -580,7 +580,13 @@ def plot_postprocess_value(
     return fig
 
 
-def plot_recall_and_non_pii_redaction(summary_df: pd.DataFrame, output_path: Path | None = None):
+def plot_recall_and_non_pii_redaction(
+    summary_df: pd.DataFrame,
+    output_path: Path | None = None,
+    *,
+    recall_key: str = "core_pii_recall",
+    recall_label: str = "Core PII recall",
+):
     if summary_df.empty:
         raise ValueError("No evaluation results available to plot")
 
@@ -599,7 +605,7 @@ def plot_recall_and_non_pii_redaction(summary_df: pd.DataFrame, output_path: Pat
     bar_colors = [palette(index % 10) for index in range(len(df))]
     ax_recall.barh(
         y,
-        df["core_pii_recall"],
+        df[recall_key],
         height=row_height,
         color=bar_colors,
         edgecolor="#222222",
@@ -609,12 +615,12 @@ def plot_recall_and_non_pii_redaction(summary_df: pd.DataFrame, output_path: Pat
     ax_recall.set_yticks(y, df["source"])
     ax_recall.invert_yaxis()
     ax_recall.xaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=0))
-    ax_recall.set_xlabel("Core PII recall")
-    ax_recall.set_title("Core PII Recall", fontsize=18, weight="bold", pad=16)
+    ax_recall.set_xlabel(recall_label)
+    ax_recall.set_title(recall_label.title(), fontsize=18, weight="bold", pad=16)
     ax_recall.grid(axis="x", color="#d0d0d0", linewidth=0.8)
     ax_recall.set_axisbelow(True)
 
-    for idx, value in enumerate(df["core_pii_recall"]):
+    for idx, value in enumerate(df[recall_key]):
         if pd.isna(value):
             continue
         x = min(float(value) - 0.015, 0.985)
