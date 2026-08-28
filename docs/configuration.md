@@ -172,5 +172,6 @@ the API model tag `qwen3:8b`. Before each benchmark run, manually verify that
 the model behind that tag uses `Q4_K_M` quantization; the tag alone does not
 prove the quantization. The validated generation settings are temperature
 `0.6`, top-p `0.95`, thinking enabled, 8,000 output tokens, and two workers.
+The paper's Ollama deployment used a context length of 16,384 tokens.
 Local Ollama commonly uses `http://127.0.0.1:11434/v1`; override the endpoint
 at runtime rather than editing or copying the canonical YAML.

@@ -11,6 +11,7 @@ evaluation_bundle*/
 configs/*.local.yaml
 
 # --- Model weights (too big for GitHub; transfer out-of-band) ---
+models/
 *.pt
 *.pt.bak*
 *.gguf

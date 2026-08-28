@@ -7,8 +7,6 @@ annotated-doc==0.0.5
     # via typer
 anyio==4.14.2
     # via httpx
-biopython==1.87
-    # via span-annotations
 certifi==2026.7.22
     # via
     #   httpcore
@@ -30,9 +28,7 @@ cycler==0.12.1
 deduce==3.0.6
     # via -r requirements/deduce.txt
 docdeid==1.0.1
-    # via
-    #   deduce
-    #   span-annotations
+    # via deduce
 filelock==3.32.2
     # via
     #   huggingface-hub
@@ -71,8 +67,6 @@ idna==3.18
     #   requests
 jinja2==3.1.6
     # via torch
-jpype1==1.7.1
-    # via span-annotations
 kiwisolver==1.5.0
     # via matplotlib
 markdown-it-py==4.2.0
@@ -91,7 +85,6 @@ numpy==2.4.6 ; python_full_version < '3.12'
     # via
     #   -r requirements/core.txt
     #   -r requirements/robbert.txt
-    #   biopython
     #   contourpy
     #   docdeid
     #   matplotlib
@@ -102,7 +95,6 @@ numpy==2.5.1 ; python_full_version >= '3.12'
     # via
     #   -r requirements/core.txt
     #   -r requirements/robbert.txt
-    #   biopython
     #   contourpy
     #   docdeid
     #   matplotlib
@@ -116,7 +108,6 @@ onnxruntime==1.28.0
 packaging==26.2
     # via
     #   huggingface-hub
-    #   jpype1
     #   matplotlib
     #   onnxruntime
     #   transformers
@@ -159,8 +150,6 @@ shellingham==1.5.4
     # via typer
 six==1.17.0
     # via python-dateutil
-span-annotations @ git+https://github.com/stighellemans/span-annotations.git@a873943305ad36d94bc11372774646a9f658e044
-    # via -r requirements/llm.txt
 sympy==1.14.0
     # via torch
 tokenizers==0.22.2

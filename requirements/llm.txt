@@ -1,5 +1,1 @@
 requests>=2.28
-# LLM span extraction reuses the validated fuzzy aligner (find_all_occurrences)
-# + JSON salvage (salvage_json_list) from span-annotations, for exact parity with
-# the gold-testset validation run. Pulls biopython transitively.
-span-annotations @ git+https://github.com/stighellemans/span-annotations.git@a873943305ad36d94bc11372774646a9f658e044

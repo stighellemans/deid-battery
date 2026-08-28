@@ -1,5 +1,9 @@
 # deid-battery
 
+Research code accompanying the MedDeID manuscript. This repository is maintained
+separately from the production MedDeID suite and is intended to reproduce the
+paper's comparator runs and analyses.
+
 Run a **battery of de-identification systems** over the same documents, emit one
 **unified span schema**, optionally inject **known metadata** (patient / caregiver
 names) into the rule engines and the post-processor, and evaluate **core PII
@@ -9,6 +13,9 @@ Config-driven and path-independent: the same code runs on a CPU VM or a GPU box.
 Designed so sensitive text can be processed **fully offline** (no model calls an
 external API).
 
+For the exact Qwen prompt assets, paper configuration, and repository dependency
+boundaries, see [Paper reproducibility](docs/paper_reproducibility.md).
+
 ## Systems (runners)
 
 | runner | system(s) | notes |
@@ -17,7 +24,7 @@ external API).
 | `deduce` | `deduce` / `belgian-deduce` | rule engines; consume metadata |
 | `gliner` | GLiNER zero-shot PII | needs `transformers<5.7` |
 | `hf_token` | HF token classifiers (e.g. openai / OpenMed privacy filters) | `OpenAIPrivacyFilter` needs `transformers>=5.7` |
-| `llm` | any OpenAI-compatible chat endpoint (vLLM / llama.cpp) | grammar-constrained JSON |
+| `llm` | any OpenAI-compatible chat endpoint (Ollama / vLLM / llama.cpp) | prompted JSON; schema-constrained when thinking is disabled |
 | `deidentify` | `deidentify` BiLSTM-CRF (nedap/Trienes 2020) | 2020 stack: py3.9 + **amd64 Linux** only; runs on **CPU**; dedicated venv |
 
 > **Dependency note.** GLiNER (`transformers<5.7`) and the privacy filters
@@ -220,7 +227,7 @@ batches into one battery JSONL file per annotator with:
 
 ```bash
 python -m deid_battery.legacy_human_annotations \
-  --source-root /home/s0176515/Desktop/admin/annotations/llm_experiment \
+  --source-root /path/to/annotations/llm_experiment \
   --battery-input input.jsonl \
   --output-dir out/human-annotators
 ```
@@ -245,7 +252,7 @@ malformed record without modifying the source data:
 
 ```bash
 python -m deid_battery.human_annotation_missingness \
-  --source-root /home/s0176515/Desktop/admin/annotations/llm_experiment \
+  --source-root /path/to/annotations/llm_experiment \
   --battery-input input.jsonl \
   --output out/human-annotators/missingness.tsv
 ```
@@ -260,11 +267,11 @@ annotations:
   stig:
     name: Annotator 1
     method: annotator-level-jsonl
-    path: /home/s0176515/Desktop/admin/deid-battery/out/human-annotators/stig.jsonl
+    path: /path/to/deid-battery/out/human-annotators/annotator-1.jsonl
   tomstroobants:
     name: Annotator 2
     method: annotator-level-jsonl
-    path: /home/s0176515/Desktop/admin/deid-battery/out/human-annotators/tomstroobants.jsonl
+    path: /path/to/deid-battery/out/human-annotators/annotator-2.jsonl
 ```
 
 These files contain sensitive document identifiers and span text and must remain
