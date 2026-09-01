@@ -291,11 +291,19 @@ scored against a `deid-eval-annotator` gold bundle
 (`reference_items.jsonl`). The evaluator and
 plot are vendored under `deid_battery/_vendor/` so the package is self-contained.
 
-In addition to model-detection metrics, a normal battery run evaluates the
-shared date/age pseudonymization layer on gold `Date` and `Age_Birthdate` spans.
-This measures transformation validity, transformation types, and failure
-reasons; it does not repeat model accuracy. Its privacy-safe aggregates are
-written to `out/analysis/raw/pseudonymization/export/`.
+In addition to model-detection metrics, a normal battery run performs two
+date/age pseudonymization analyses. The gold-span analysis isolates the shared
+substitution layer's validity, transformation types, and failure reasons. The
+predicted-span analysis measures the complete detection, boundary, label, and
+transformation chain using saved model outputs, so it requires no new inference.
+
+The predicted-span headline is gold-span based: a target succeeds only when one
+prediction fully covers it, assigns the correct `Date` or `Age_Birthdate` label,
+and produces a protocol-valid transformation. The export also separates
+residual exposure from privacy-safe but clinically invalid generic redaction.
+Privacy-safe aggregates are written to
+`out/analysis/raw/pseudonymization/export/` and
+`out/analysis/raw/pseudonymization/predicted/<source>/export/`.
 
 Regenerate only that additional evidence, without running any models:
 
@@ -304,7 +312,8 @@ bash scripts/evaluate_pseudonymization.sh
 ```
 
 The standalone command and the normal battery run use the same
-`evaluate.pseudonymization` settings in `configs/battery.yaml`.
+`evaluate.pseudonymization` settings in `configs/battery.yaml`, including each
+saved output listed under `predicted_sources`.
 
 ## Running on a CPU VM
 

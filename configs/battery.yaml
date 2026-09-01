@@ -145,13 +145,16 @@ evaluate:
     confidence_level: 0.95
   plot: core_pii_recall_non_pii_redaction.png
   plot_time_vs_recall: time_vs_recall.png
-  # Extra evidence about the shared substitution layer. This deliberately uses
-  # gold Date/Age_Birthdate spans, so it measures transformation validity rather
-  # than repeating model detection accuracy. A normal battery run generates it;
-  # scripts/evaluate_pseudonymization.sh can regenerate it independently.
+  # Extra evidence about the shared substitution layer. The gold-span analysis
+  # isolates transformation validity; predicted_sources additionally measures
+  # the complete detection -> boundary -> label -> transformation chain without
+  # rerunning inference.
   pseudonymization:
     enabled: true
     output_dir: analysis/raw/pseudonymization
     document_creation_date: "2025-01-15"
     date_shift_days: 371
     birthdate_replacement_mode: age
+    predicted_sources:
+      - id: synthetic@meta
+        predictions: runs/synthetic/by_doc.meta.jsonl

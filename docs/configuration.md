@@ -41,10 +41,14 @@ block is used only by the latter and does not affect an existing `input.jsonl`.
 
 ## Pseudonymization evidence
 
-A normal battery evaluation also generates aggregate evidence for the shared
-date/age substitution layer under `out/analysis/raw/pseudonymization/export/`. It evaluates
-gold `Date` and `Age_Birthdate` spans, so its transformation-validity results
-are intentionally separate from the per-model detection results.
+A normal battery evaluation generates aggregate evidence for the shared
+date/age substitution layer under `out/analysis/raw/pseudonymization/export/`.
+That gold-span result isolates transformation validity. Saved outputs configured
+under `predicted_sources` are evaluated end to end under
+`out/analysis/raw/pseudonymization/predicted/<source>/export/`: detection,
+boundary coverage, label assignment, and transformation validity all enter the
+headline failure rate. This second analysis reuses `by_doc` output and does not
+invoke a model runner.
 
 Run only this inexpensive evaluation when model outputs do not need to be
 regenerated:
@@ -54,7 +58,18 @@ bash scripts/evaluate_pseudonymization.sh
 ```
 
 This standalone entry point reads the same input, gold bundle, output directory,
-and `evaluate.pseudonymization` settings from `configs/battery.yaml`.
+and `evaluate.pseudonymization` settings from `configs/battery.yaml`. Prediction
+paths are relative to the configured battery `output_dir`, for example:
+
+```yaml
+predicted_sources:
+  - id: synthetic@meta
+    predictions: runs/synthetic/by_doc.meta.jsonl
+```
+
+Only aggregate controlled-vocabulary tables may leave a clinical evaluation
+machine. The private inputs, document identifiers, text, and span-level outcomes
+remain local.
 
 ## Label-assignment confusion analysis
 
